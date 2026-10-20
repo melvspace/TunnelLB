@@ -28,11 +28,22 @@ RUN set -eux; \
     install -D -m 0755 "frp_0.71.1_linux_${TARGETARCH}/frpc" /out/usr/local/bin/frpc; \
     install -D -m 0644 frp_0.71.1_linux_amd64/LICENSE /out/usr/share/doc/frp/LICENSE
 
-FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS builder
+FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS chef
 RUN apt-get update \
     && apt-get install --no-install-recommends -y cmake pkg-config \
     && rm -rf /var/lib/apt/lists/*
+RUN cargo install cargo-chef --locked --version 0.1.78
 WORKDIR /build
+
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY src/ ./src/
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+# Cache compiled dependencies independently of application code and version.
+COPY --from=planner /build/recipe.json recipe.json
+RUN cargo chef cook --locked --release --bin tunnellb --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
 COPY src/ ./src/
 RUN cargo build --locked --release --bin tunnellb

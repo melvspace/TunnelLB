@@ -1,0 +1,183 @@
+name: Container image
+
+on:
+  workflow_call:
+    inputs:
+      release-tag:
+        description: Release tag to publish; leave empty to build and test only
+        type: string
+        default: ""
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release-tag != '' && format('refs/tags/{0}', inputs.release-tag) || github.sha }}
+          persist-credentials: false
+
+      - name: Prepare image name and verify release version
+        id: image
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+          release_tag = os.environ["RELEASE_TAG"]
+
+          if release_tag and release_tag != f"v{version}":
+              raise SystemExit("Release tag must be v<Cargo.toml package version>")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print(f"version={version}", file=output)
+          PY
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: inputs.release-tag != ''
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ steps.image.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.image.outputs.revision }}
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Build native image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ inputs.release-tag == '' && 'tunnellb:ci' || '' }}
+          outputs: ${{ inputs.release-tag != '' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', steps.image.outputs.name) || 'type=docker' }}
+          cache-from: type=gha,scope=image-${{ matrix.arch }}
+          # CI warms the default-branch cache, which releases can also read.
+          # Tag-scoped cache exports cannot be reused by subsequent releases.
+          cache-to: ${{ inputs.release-tag == '' && format('type=gha,mode=max,scope=image-{0},ignore-error=true,timeout=5m', matrix.arch) || '' }}
+
+      - name: Smoke test image
+        env:
+          IMAGE: ${{ inputs.release-tag != '' && format('{0}@{1}', steps.image.outputs.name, steps.build.outputs.digest) || 'tunnellb:ci' }}
+          VERSION: ${{ steps.image.outputs.version }}
+        run: |
+          docker run --rm "$IMAGE" --version | grep -Fx "tunnellb $VERSION"
+          docker run --rm "$IMAGE" crd > "$RUNNER_TEMP/servers.yaml"
+          diff -u charts/tunnellb/crds/servers.yaml "$RUNNER_TEMP/servers.yaml"
+          docker run --rm --entrypoint frpc "$IMAGE" --version
+          docker run --rm --entrypoint sh "$IMAGE" -ec '
+            test "$(id -u)" = 10001
+            test -x /opt/frp/amd64/frps
+            test -x /opt/frp/arm64/frps
+          '
+
+      - name: Export image digest
+        if: inputs.release-tag != ''
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/digests/$ARCH"
+
+      - name: Upload image digest
+        if: inputs.release-tag != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+  publish:
+    name: Publish multi-platform image
+    if: inputs.release-tag != ''
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download image digests
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: image-digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate release tag
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.release-tag }}
+
+      - name: Create and verify multi-platform manifest
+        env:
+          IMAGE_TAG: ${{ steps.meta.outputs.tags }}
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          sources=()
+
+          for arch in amd64 arm64; do
+            digest="$(cat "$arch")"
+
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Invalid image digest for $arch" >&2
+              exit 1
+            fi
+
+            sources+=("$image@$digest")
+          done
+
+          docker buildx imagetools create --tag "$IMAGE_TAG" "${sources[@]}"
+          docker buildx imagetools inspect --raw "$IMAGE_TAG" |
+            jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] | sort == ["amd64", "arm64"]'

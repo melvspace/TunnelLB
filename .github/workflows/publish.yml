@@ -1,92 +1,42 @@
 name: Publish release
+run-name: Publish ${{ inputs.release-tag || github.event.release.tag_name }}
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: Existing release tag to rebuild (vX.Y.Z or chart-vX.Y.Z)
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-${{ github.event.release.tag_name }}
+  group: publish-${{ inputs.release-tag || github.event.release.tag_name }}
   cancel-in-progress: false
 
 jobs:
   checks:
-    if: startsWith(github.event.release.tag_name, 'v') || startsWith(github.event.release.tag_name, 'chart-v')
+    if: startsWith(inputs.release-tag || github.event.release.tag_name, 'v') || startsWith(inputs.release-tag || github.event.release.tag_name, 'chart-v')
     uses: ./.github/workflows/ci.yml
+    with:
+      release-tag: ${{ inputs.release-tag || github.event.release.tag_name }}
 
   image:
-    if: startsWith(github.event.release.tag_name, 'v')
+    if: startsWith(inputs.release-tag || github.event.release.tag_name, 'v')
     needs: checks
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    uses: ./.github/workflows/image.yml
     permissions:
       contents: read
       packages: write
-    steps:
-      - name: Check out the released commit
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Verify release tag matches the crate version
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          python3 - <<'PY'
-          import os
-          import tomllib
-          from pathlib import Path
-
-          version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
-
-          if os.environ["RELEASE_TAG"] != f"v{version}":
-              raise SystemExit("Release tag must be v<Cargo.toml package version>")
-          PY
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Generate image tags and labels
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/${{ github.repository }}
-          flavor: latest=false
-          tags: |
-            type=semver,pattern={{version}},value=${{ github.event.release.tag_name }}
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.licenses=Apache-2.0
-
-      - name: Build and push release image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=release-image
-          cache-to: type=gha,mode=max,scope=release-image
+    with:
+      release-tag: ${{ inputs.release-tag || github.event.release.tag_name }}
 
   chart:
-    if: startsWith(github.event.release.tag_name, 'chart-v')
+    if: startsWith(inputs.release-tag || github.event.release.tag_name, 'chart-v')
     needs: checks
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -97,7 +47,7 @@ jobs:
       - name: Check out the released commit
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
+          ref: refs/tags/${{ inputs.release-tag || github.event.release.tag_name }}
           persist-credentials: false
 
       - name: Set up Helm
@@ -107,7 +57,7 @@ jobs:
 
       - name: Verify release tag matches the chart version
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ inputs.release-tag || github.event.release.tag_name }}
         run: |
           chart_version="$(helm show chart charts/tunnellb | awk '$1 == "version:" { print $2 }')"
 
@@ -128,7 +78,7 @@ jobs:
 
       - name: Push release chart
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ inputs.release-tag || github.event.release.tag_name }}
         run: |
           helm push "$RUNNER_TEMP/charts/tunnellb-${RELEASE_TAG#chart-v}.tgz" \
             "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"

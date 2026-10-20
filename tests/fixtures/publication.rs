@@ -142,7 +142,6 @@ impl Run {
             "spec": {
                 "type": "LoadBalancer",
                 "loadBalancerClass": "tunnellb.io/edge",
-                "allocateLoadBalancerNodePorts": false,
                 "selector": {
                     "app": "e2e-backend"
                 },
@@ -186,6 +185,16 @@ impl Run {
         })?;
 
         let service = self.get(&self.app, "service", name)?;
+        ensure!(
+            service["spec"]["allocateLoadBalancerNodePorts"] == true
+                && service["spec"]["ports"]
+                    .as_array()
+                    .is_some_and(|ports| ports
+                        .iter()
+                        .all(|p| p["nodePort"].as_u64().is_some_and(|n| n > 0))),
+            "Kubernetes did not allocate default NodePorts"
+        );
+
         ensure!(
             service["status"]["loadBalancer"]["ingress"]
                 == json!([

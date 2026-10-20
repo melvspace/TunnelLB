@@ -87,7 +87,6 @@ metadata:
 spec:
   type: LoadBalancer
   loadBalancerClass: tunnellb.io/edge
-  allocateLoadBalancerNodePorts: false
   selector:
     app: web
   ports:
@@ -107,7 +106,8 @@ For UDP, set `protocol: UDP` ([example](examples/udp-service.yaml)).
 
 Use Services with Pod selectors. TunnelLB cannot use headless, selectorless, or `hostNetwork` backends.
 If a NetworkPolicy blocks ingress, let connector Pods in `tunnellb-system` access the application ports.
-Before you convert a Service, remove all NodePorts.
+To disable automatic NodePort allocation, set `allocateLoadBalancerNodePorts: false`.
+This setting is optional.
 Keep `externalTrafficPolicy` and `internalTrafficPolicy` set to `Cluster`.
 
 ### Service options

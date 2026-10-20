@@ -19,9 +19,10 @@ operator-owned state and reject changes. Resetting host identity is an explicit
 administrator operation. First-contact identity is not independently verified.
 
 Administrators control Server enrollment and namespace opt-in. Applications use
-`type: LoadBalancer`, `loadBalancerClass: tunnellb.io/edge`, and
-`allocateLoadBalancerNodePorts: false`. Annotations provide explicit Server or
-pool selection, multiple entry points and per-port PROXY protocol.
+`type: LoadBalancer` and `loadBalancerClass: tunnellb.io/edge`.
+NodePort allocation is optional and does not change tunnel routing.
+Annotations provide explicit Server or pool selection, multiple entry points
+and per-port PROXY protocol.
 
 ## Allocation and lifecycle
 

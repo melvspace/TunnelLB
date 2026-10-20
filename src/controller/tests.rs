@@ -197,9 +197,9 @@ fn service() -> Service {
         },
         "spec": {
             "type": "LoadBalancer", "loadBalancerClass": CLASS,
-            "allocateLoadBalancerNodePorts": false, "clusterIP": "10.96.1.10",
+            "allocateLoadBalancerNodePorts": true, "clusterIP": "10.96.1.10",
             "selector": {"app": "web"},
-            "ports": [{"name": "https", "port": 443, "targetPort": 8443, "protocol": "TCP"}],
+            "ports": [{"name": "https", "port": 443, "targetPort": 8443, "protocol": "TCP", "nodePort": 30443}],
         },
         "status": {"loadBalancer": {"ingress": [{"ip": "8.8.8.8", "ipMode": "Proxy"}]}},
     }))

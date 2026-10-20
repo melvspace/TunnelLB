@@ -15,7 +15,6 @@ pub(super) fn service_value() -> Value {
         "metadata": {"name": "web", "namespace": "apps", "uid": "service-uid"},
         "spec": {
             "type": "LoadBalancer", "loadBalancerClass": CLASS,
-            "allocateLoadBalancerNodePorts": false,
             "clusterIP": "10.96.0.10", "clusterIPs": ["10.96.0.10"],
             "selector": {"app": "web"},
             "ports": [{"name": "http", "port": 80, "protocol": "TCP", "targetPort": 8080}]

@@ -190,12 +190,6 @@ fn validate_exposure(spec: &ServiceSpec) -> Result<Ipv4Addr> {
         )));
     }
 
-    if spec.allocate_load_balancer_node_ports != Some(false) {
-        return Err(service_error(
-            "allocateLoadBalancerNodePorts must be explicitly false",
-        ));
-    }
-
     if spec.health_check_node_port.is_some_and(|p| p != 0) {
         return Err(service_error("healthCheckNodePort is not permitted"));
     }
@@ -278,10 +272,6 @@ fn published_ports(service_ports: &[ServicePort]) -> Result<Vec<PublishedPort>> 
     let mut ports = Vec::with_capacity(service_ports.len());
 
     for p in service_ports {
-        if p.node_port.is_some_and(|port| port != 0) {
-            return Err(service_error("existing nodePorts must be removed"));
-        }
-
         let name = p.name.as_deref().unwrap_or("");
 
         if (!name.is_empty() && !dns_label(name)) || (name.is_empty() && service_ports.len() > 1) {

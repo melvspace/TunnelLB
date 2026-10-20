@@ -30,14 +30,32 @@ fn service_defaults_are_explicit_and_namespace_opt_in_is_exact() {
 }
 
 #[test]
+fn node_ports_do_not_change_tunnel_destination_or_public_ports() {
+    let expected = service_request(&service(), &namespace()).unwrap();
+
+    for allocation in [None, Some(true), Some(false)] {
+        for node_port in [None, Some(30080)] {
+            let mut s = service();
+            let spec = s.spec.as_mut().unwrap();
+            spec.allocate_load_balancer_node_ports = allocation;
+            spec.ports.as_mut().unwrap()[0].node_port = node_port;
+
+            assert_eq!(
+                service_request(&s, &namespace()).unwrap(),
+                expected,
+                "allocation={allocation:?}, node_port={node_port:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn services_reject_implicit_or_unsupported_exposure() {
     for (field, value) in [
         ("type", json!("ClusterIP")),
         ("type", json!("ExternalName")),
         ("loadBalancerClass", Value::Null),
         ("loadBalancerClass", json!("other")),
-        ("allocateLoadBalancerNodePorts", Value::Null),
-        ("allocateLoadBalancerNodePorts", json!(true)),
         ("selector", json!({})),
         ("selector", Value::Null),
         ("clusterIP", json!("None")),
@@ -83,7 +101,6 @@ fn service_ports_reject_bad_ranges_protocols_and_ambiguous_names() {
         ("protocol", json!("SCTP")),
         ("protocol", json!("tcp")),
         ("protocol", json!("")),
-        ("nodePort", json!(30080)),
         ("name", json!("bad/name")),
     ] {
         let mut v = service_value();

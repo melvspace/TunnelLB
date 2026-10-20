@@ -678,7 +678,7 @@ fn mismatched_request_cannot_reuse_a_previous_selector_or_uid() {
 fn invalid_current_service_keeps_its_service_error_classification() {
     let mut s = service();
     let request = service_request(&s, &namespace()).unwrap();
-    s.spec.as_mut().unwrap().allocate_load_balancer_node_ports = Some(true);
+    s.spec.as_mut().unwrap().external_traffic_policy = Some("Local".into());
     let error = validate_backends(&request, &s, &[], &[]).unwrap_err();
 
     assert!(matches!(
@@ -686,5 +686,5 @@ fn invalid_current_service_keeps_its_service_error_classification() {
         Some(ValidationError::InvalidService(_))
     ));
 
-    assert!(error.to_string().contains("allocateLoadBalancerNodePorts"));
+    assert!(error.to_string().contains("externalTrafficPolicy"));
 }

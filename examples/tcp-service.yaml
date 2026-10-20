@@ -8,7 +8,6 @@ metadata:
 spec:
   type: LoadBalancer
   loadBalancerClass: tunnellb.io/edge
-  allocateLoadBalancerNodePorts: false
   # Match real, ready application Pods. TLS terminates in those Pods.
   selector:
     app: web

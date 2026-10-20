@@ -1,47 +1,55 @@
 # TunnelLB
 
-TunnelLB installs [FRP](https://github.com/fatedier/frp) on a public server.
-It sends TCP and UDP traffic through encrypted tunnels to Kubernetes Services.
-The cluster starts the tunnels. The public server is not a cluster node.
+TunnelLB makes Kubernetes Services available through a public server.
+It installs [FRP](https://github.com/fatedier/frp) and starts encrypted tunnels from the cluster to the server.
+The server sends TCP and UDP traffic through these tunnels to your applications.
+The public server stays outside the cluster.
 
-## Requirements
+## Before you start
 
-- Use Kubernetes 1.32 or later with Linux nodes, kube-proxy, pod veth networking,
-  and NetworkPolicy enforcement. TunnelLB cannot use CNI socket-level load balancing.
-- On k3s, disable ServiceLB with `--disable=servicelb` on every server node.
-- Use Helm 4. Install TunnelLB once in each cluster. Use a namespace only for TunnelLB.
-- Use an amd64 or arm64 server with public IPv4 and systemd.
-  Use Debian 12/13 or Ubuntu 22.04/24.04.
-- Use root SSH access or an account with passwordless sudo.
-- Open SSH, application ports, and TCP ports **20000–29999** in the server firewall.
+- Use Kubernetes 1.32 or later with Linux nodes, kube-proxy, veth interfaces, and NetworkPolicy enforcement.
+- Do not use CNI socket-level load balancing.
+- On k3s, disable ServiceLB with `--disable=servicelb` on each control-plane node.
+- Use Helm 4.
+- Use a public IPv4 server with amd64 or arm64, systemd, and Debian 12/13 or Ubuntu 22.04/24.04.
+- Use a server without k3s or Tailscale.
 
-## Install
+## 1. Install TunnelLB
 
-Select a [release](https://github.com/melvspace/TunnelLB/releases).
-Replace `X.Y.Z` with its version number. Do not include the `v` prefix.
+Install TunnelLB once in each cluster.
+Use a namespace that only TunnelLB uses.
+If the namespace is already present, add `--set createNamespace=false` to the Helm command.
+The admission policy of this namespace must let init containers use `NET_ADMIN`.
+
+Select a version from [GitHub Releases](https://github.com/melvspace/TunnelLB/releases).
+Replace `X.Y.Z` with the version number without `v`.
 
 ```bash
-VERSION="X.Y.Z"
 helm upgrade --install tunnellb oci://ghcr.io/melvspace/charts/tunnellb \
-  --version "$VERSION" \
+  --version X.Y.Z \
   --namespace tunnellb-system --create-namespace
 ```
 
-For a namespace that is already present, set `createNamespace=false`.
-Configure its admission policy to let `NET_ADMIN` init containers run.
-See [chart settings](charts/tunnellb/values.yaml).
+## 2. Add a public server
 
-## Add a server
+Use `root` or an SSH account with passwordless sudo.
+TunnelLB uses this account to install FRP and start or stop its systemd services.
+Add your SSH public key to that account's `authorized_keys` file.
 
-Add the SSH public key to the server's `authorized_keys` file.
-Store the private key in a Secret:
+In the server firewall, open the SSH port, your application ports, and TCP 20000–29999 for tunnels.
+TunnelLB does not change firewall rules.
+
+Create a Secret from the SSH private key:
 
 ```bash
 kubectl -n tunnellb-system create secret generic edge-1-ssh \
   --from-file=ssh-privatekey=/path/to/private-key
 ```
 
-Save this manifest as `server.yaml`. Replace the address and SSH user.
+Save this manifest as `server.yaml`.
+Replace `203.0.113.10` with your server's public IPv4 address.
+Set `ssh.user` to your SSH account.
+Set `allowedNamespaces` to the namespaces that can use this server.
 
 ```yaml
 apiVersion: tunnellb.io/v1alpha1
@@ -59,24 +67,24 @@ spec:
 
 ```bash
 kubectl apply -f server.yaml
-kubectl get servers
+kubectl get servers --watch
 ```
 
-Wait until the Server status is `Ready`.
-TunnelLB accepts the first SSH host key. If the key changes, TunnelLB stops SSH operations.
-For port settings, see the [Server example](examples/server.yaml).
+Wait for the `Ready` phase.
+TunnelLB saves the first SSH host key and stops SSH operations if that key changes.
 
-## Publish an application
+## 3. Publish a Service
 
-Create the application namespace. Enable TunnelLB for that namespace:
+Create a namespace for your application:
 
 ```bash
 kubectl create namespace apps
 kubectl label namespace apps tunnellb.io/enabled=true
 ```
 
-Deploy your application in `apps`. Save this manifest as `service.yaml`.
-Set the selector and target port for your application Pods.
+Deploy your application in `apps`.
+Save this manifest as `service.yaml`.
+Set `selector` and `targetPort` to match your application Pods.
 
 ```yaml
 apiVersion: v1
@@ -91,9 +99,9 @@ spec:
     app: web
   ports:
     - name: https
+      protocol: TCP
       port: 443
       targetPort: 8443
-      protocol: TCP
 ```
 
 ```bash
@@ -101,60 +109,64 @@ kubectl apply -f service.yaml
 kubectl -n apps get service web --watch
 ```
 
-`EXTERNAL-IP` shows the public server address. Configure TLS in your application or ingress gateway.
-For UDP, set `protocol: UDP` ([example](examples/udp-service.yaml)).
+The `EXTERNAL-IP` column shows the public server address.
+For HTTPS, configure TLS in your application or ingress gateway.
+For UDP, set `protocol: UDP`.
 
-Use Services with Pod selectors. TunnelLB cannot use headless, selectorless, or `hostNetwork` backends.
-If a NetworkPolicy blocks ingress, let connector Pods in `tunnellb-system` access the application ports.
-To disable automatic NodePort allocation, set `allocateLoadBalancerNodePorts: false`.
-This setting is optional.
+Use Services with Pod selectors and a ClusterIP.
+Do not use headless Services or `hostNetwork` Pods.
 Keep `externalTrafficPolicy` and `internalTrafficPolicy` set to `Cluster`.
+If your application has an ingress NetworkPolicy, let connector Pods in `tunnellb-system` connect to its ports.
 
-### Service options
+## Options
 
-Add these settings under `metadata.annotations`:
+Add these settings to the Service's `metadata.annotations`:
 
-| Annotation | Example | Function |
+| Annotation | Example | Effect |
 |---|---|---|
-| `tunnellb.io/servers` | `"edge-1,edge-2"` | Select these servers. |
-| `tunnellb.io/pool` | `"public"` | Select servers with `spec.pool: public`. |
-| `tunnellb.io/replicas` | `"2"` | Use two servers. |
-| `tunnellb.io/proxy-protocol` | `"https=v2"` | Send client IP data through PROXY protocol. |
+| `tunnellb.io/servers` | `"edge-1,edge-2"` | Uses the specified servers. |
+| `tunnellb.io/pool` | `"public"` | Selects servers with `spec.pool: public`. |
+| `tunnellb.io/replicas` | `"2"` | Uses two servers instead of one. |
+| `tunnellb.io/proxy-protocol` | `"https=v2"` | Sends the client IP through PROXY protocol on the named port. |
 
-By default, TunnelLB selects one server. Use either `servers` or `pool`.
-A `servers` list sets the number of replicas.
-If you also set `replicas`, use the number of servers in the list.
+Use either `servers` or `pool`.
+If you set both `servers` and `replicas`, set `replicas` to the number of listed servers.
+Use PROXY protocol only if your application can read it.
+Without PROXY protocol, the application sees the tunnel connector's IP.
 
-Without PROXY protocol, applications receive the connector's IP.
-Use receivers that can read PROXY protocol: v1/v2 for TCP, or v2 for UDP.
-Do not use PROXY addresses to authenticate clients.
+See the [chart settings](charts/tunnellb/values.yaml) and [Server settings](examples/server.yaml) for more options.
 
-## Share a server
+## Use one server with several clusters
 
-Create a Server in each cluster. Use one Server object for each address in each cluster.
-Use different public port numbers for different Services, also across TCP and UDP.
+Add a `Server` with the same public address in each cluster.
+Create only one `Server` for that address in each cluster.
+Use different public port numbers for different Services.
+This rule also applies to a TCP Service and a UDP Service.
 One Service can use both protocols on the same port.
 
-TunnelLB selects available tunnel ports. It keeps port reservations when a cluster disconnects.
+TunnelLB selects available tunnel ports automatically.
 If a Service shows `PortConflict`, TunnelLB tries again in ten minutes or less.
-If you delete the Server in one cluster, the tunnels of other clusters continue.
+If you delete a `Server`, TunnelLB removes only that Server's tunnels.
 
-Each cluster's administrator can run commands as root on the server.
-
-## Status and removal
+## Check status
 
 ```bash
+kubectl get servers
 kubectl -n apps describe service web
 kubectl -n tunnellb-system get pods,jobs
 ```
 
-If a server stops, the Service keeps its IP address.
-The tunnels connect again when the server is available.
-TunnelLB does not provide DNS updates or session failover.
-If you change the ports or destination of a Service, TunnelLB closes its connections.
+If TunnelLB cannot connect to the server, the Service keeps its IP address.
+TunnelLB connects again when the server is available.
 
-1. Delete the published Services. Wait for deletion to complete.
-2. Delete the Servers. Wait for deletion to complete.
-3. Uninstall TunnelLB.
+## Uninstall
 
-If a server is unreachable, deletion waits for remote cleanup.
+1. Delete the Services that use TunnelLB. Wait for their removal to complete.
+2. Delete the Servers. Wait for their removal to complete.
+3. Uninstall the operator:
+
+   ```bash
+   helm uninstall tunnellb --namespace tunnellb-system
+   ```
+
+If TunnelLB cannot connect to a server, removal waits until the connection is available.

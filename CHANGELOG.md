@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/melvspace/TunnelLB/compare/v0.1.0...v0.2.0) (2026-10-20)
+
+
+### Features
+
+* **firewall:** manage publication UFW rules and diagnostics ([55cc3fa](https://github.com/melvspace/TunnelLB/commit/55cc3fa134695fc8c88447b6d42a3abf94e0f5aa))
+
 ## 0.1.0 (2026-10-20)
 
 

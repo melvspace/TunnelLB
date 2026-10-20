@@ -13,8 +13,8 @@ use super::*;
 use crate::{
     allocation::Ledger,
     api::{
-        BackendPort, Machine, MachineSpec, PortRange, Protocol, ProxyProtocol, PublishedPort,
-        SecretReference, ServiceRequest, SshSpec,
+        BackendPort, PortRange, Protocol, ProxyProtocol, PublishedPort, SecretReference, Server,
+        ServerSpec, ServiceRequest, SshSpec,
     },
 };
 use k8s_openapi::{ByteString, api::core::v1::Secret};
@@ -111,9 +111,9 @@ fn record() -> PublicationRecord {
     PublicationRecord {
         publication: Publication {
             id: ID.into(),
-            machine_name: "edge".into(),
-            machine_uid: "machine-uid".into(),
-            machine_address: "203.0.113.10".parse().unwrap(),
+            server_name: "edge".into(),
+            server_uid: "server-uid".into(),
+            server_address: "203.0.113.10".parse().unwrap(),
             control_port: 20000,
             service: ServiceRequest {
                 namespace: "application".into(),
@@ -127,12 +127,12 @@ fn record() -> PublicationRecord {
                     protocol: Protocol::Tcp,
                     proxy_protocol: ProxyProtocol::None,
                 }],
-                machines: vec!["edge".into()],
+                servers: vec!["edge".into()],
                 pool: None,
                 replicas: 1,
             },
         },
-        machine_spec: MachineSpec {
+        server_spec: ServerSpec {
             address: "203.0.113.10".into(),
             ssh: SshSpec {
                 user: "root".into(),
@@ -160,18 +160,18 @@ fn record() -> PublicationRecord {
     }
 }
 
-fn machine() -> Machine {
+fn server() -> Server {
     let record = record();
-    let mut machine = Machine::new(&record.publication.machine_name, record.machine_spec);
-    machine.metadata.uid = Some(record.publication.machine_uid);
-    machine
+    let mut server = Server::new(&record.publication.server_name, record.server_spec);
+    server.metadata.uid = Some(record.publication.server_uid);
+    server
 }
 
 fn persisted_metadata(name: &str, kind: &str, version: &str) -> ObjectMeta {
     ObjectMeta {
         name: Some(name.into()),
         namespace: Some(NAMESPACE.into()),
-        labels: Some(machine_labels(kind, "machine-uid").unwrap()),
+        labels: Some(server_labels(kind, "server-uid").unwrap()),
         uid: Some("kubernetes-object-uid".into()),
         resource_version: Some(version.into()),
         ..Default::default()
@@ -194,7 +194,7 @@ fn record_object(record: &PublicationRecord, version: &str) -> ConfigMap {
 fn ledger_object(ledger: &Ledger, version: &str) -> ConfigMap {
     ConfigMap {
         metadata: persisted_metadata(
-            &machine_state_name("ports", "machine-uid"),
+            &server_state_name("ports", "server-uid"),
             "allocation",
             version,
         ),
@@ -239,7 +239,7 @@ fn host_pin() -> HostPin {
 
 fn pin_object() -> Secret {
     Secret {
-        metadata: persisted_metadata(&machine_state_name("host", "machine-uid"), "host-pin", "7"),
+        metadata: persisted_metadata(&server_state_name("host", "server-uid"), "host-pin", "7"),
         immutable: Some(true),
         type_: Some("Opaque".into()),
         data: Some(BTreeMap::from([(

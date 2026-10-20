@@ -35,8 +35,8 @@ networkPolicy:
 # Zero omits the environment variable and uses the operator's default interval.
 requeueSeconds: 0
 
-# Only for isolated integration tests with private disposable machines.
-allowPrivateMachines: false
+# Only for isolated integration tests with private disposable servers.
+allowPrivateServers: false
 logLevel: info
 
 # Replica count is deliberately not configurable until distributed leadership

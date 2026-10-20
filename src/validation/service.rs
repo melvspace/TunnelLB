@@ -16,7 +16,7 @@ use super::{
 #[cfg(test)]
 mod tests;
 
-const MACHINES: &str = "tunnellb.io/machines";
+const SERVERS: &str = "tunnellb.io/servers";
 const POOL: &str = "tunnellb.io/pool";
 const REPLICAS: &str = "tunnellb.io/replicas";
 const PROXY_PROTOCOL: &str = "tunnellb.io/proxy-protocol";
@@ -102,19 +102,19 @@ pub(super) fn request_from_service(service: &Service) -> Result<ServiceRequest> 
 
     let annotations = service.metadata.annotations.as_ref();
     let annotation = |key: &str| annotations.and_then(|a| a.get(key));
-    let mut machines = Vec::new();
+    let mut servers = Vec::new();
 
-    if let Some(value) = annotation(MACHINES) {
+    if let Some(value) = annotation(SERVERS) {
         let mut seen = BTreeSet::new();
 
         for item in value.split(',').map(str::trim) {
             if !dns_subdomain(item) || !seen.insert(item) {
                 return Err(service_error(format!(
-                    "{MACHINES} must contain unique, nonempty Machine names"
+                    "{SERVERS} must contain unique, nonempty Server names"
                 )));
             }
 
-            machines.push(item.to_owned());
+            servers.push(item.to_owned());
         }
     }
 
@@ -130,9 +130,9 @@ pub(super) fn request_from_service(service: &Service) -> Result<ServiceRequest> 
         })
         .transpose()?;
 
-    if !machines.is_empty() && pool.is_some() {
+    if !servers.is_empty() && pool.is_some() {
         return Err(service_error(format!(
-            "{MACHINES} and {POOL} cannot be combined"
+            "{SERVERS} and {POOL} cannot be combined"
         )));
     }
 
@@ -149,15 +149,15 @@ pub(super) fn request_from_service(service: &Service) -> Result<ServiceRequest> 
                 })
         })
         .transpose()?;
-    let replicas = if machines.is_empty() {
+    let replicas = if servers.is_empty() {
         explicit_replicas.unwrap_or(1)
     } else {
-        let count = u16::try_from(machines.len())
-            .map_err(|_| service_error("too many explicit Machines"))?;
+        let count =
+            u16::try_from(servers.len()).map_err(|_| service_error("too many explicit Servers"))?;
 
         if explicit_replicas.is_some_and(|replicas| replicas != count) {
             return Err(service_error(format!(
-                "{REPLICAS} must equal the explicit Machine count ({count})"
+                "{REPLICAS} must equal the explicit Server count ({count})"
             )));
         }
 
@@ -175,7 +175,7 @@ pub(super) fn request_from_service(service: &Service) -> Result<ServiceRequest> 
         cluster_ip,
         selector: selector.clone(),
         ports,
-        machines,
+        servers,
         pool,
         replicas,
     })

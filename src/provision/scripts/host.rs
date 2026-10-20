@@ -111,7 +111,7 @@ check_not_uninstalled() {{
     plain_dir "$base/retired"
     if [ -e "$retired" ] || [ -L "$retired" ]; then
         marker "$retired" "$owner"
-        fail machine-revoked
+        fail server-revoked
     fi
 }}
 check_owner() {{
@@ -217,20 +217,20 @@ cleanup_publication() {{
     fi
 }}
 "#,
-        owner = shell_quote(&request.machine_uid),
-        account = shell_quote(&service_user(&request.machine_uid)),
+        owner = shell_quote(&request.server_uid),
+        account = shell_quote(&service_user(&request.server_uid)),
         version = FRP_VERSION,
         amd64_digest = AMD64_SHA256,
         arm64_digest = ARM64_SHA256,
-        unit_digest = digest(systemd_unit(&request.machine_uid).as_bytes())
+        unit_digest = digest(systemd_unit(&request.server_uid).as_bytes())
     ) + super::reservation::CLAIM_FUNCTIONS
 }
 
 pub(super) fn systemd_unit(uid: &str) -> String {
     format!(
-        r#"# Owned by TunnelLB Machine {uid}
+        r#"# Owned by TunnelLB Server {uid}
 [Unit]
-Description=TunnelLB publication %i for Machine {uid}
+Description=TunnelLB publication %i for Server {uid}
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60

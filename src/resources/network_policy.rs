@@ -22,7 +22,7 @@ pub fn connector_policy(
     options: &ResourceOptions,
 ) -> NetworkPolicy {
     let mut egress = vec![edge_rule(
-        publication.machine_address,
+        publication.server_address,
         publication.control_port,
     )];
 

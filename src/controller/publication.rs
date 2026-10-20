@@ -1,7 +1,5 @@
 use crate::{
-    api::{
-        MACHINE_LABEL, MANAGED_LABEL, Machine, PUBLICATION_LABEL, Publication, SERVICE_UID_LABEL,
-    },
+    api::{MANAGED_LABEL, PUBLICATION_LABEL, Publication, SERVER_LABEL, SERVICE_UID_LABEL, Server},
     connector::GuardConfig,
     jobs::{self, State},
     provision::Operation,
@@ -28,13 +26,13 @@ use std::collections::BTreeMap;
 use super::{
     Context,
     kubernetes::{apply_owned, delete_owned},
-    machine::request_for,
     reservation::reserve_publication,
+    server::request_for,
 };
 
 pub(super) async fn ensure_publication(
     record: &mut PublicationRecord,
-    machine: &Machine,
+    server: &Server,
     context: &Context,
 ) -> Result<bool> {
     ensure!(
@@ -57,7 +55,7 @@ pub(super) async fn ensure_publication(
 
     let control = context
         .store
-        .allocate(machine, &publication.service, &publication.id)
+        .allocate(server, &publication.service, &publication.id)
         .await?;
 
     if control != publication.control_port {
@@ -74,12 +72,12 @@ pub(super) async fn ensure_publication(
         return Ok(false);
     }
 
-    let Some(pin) = context.store.pin(&publication.machine_uid).await? else {
+    let Some(pin) = context.store.pin(&publication.server_uid).await? else {
         return Ok(false);
     };
     ensure!(
-        pin.address == publication.machine_address.to_string()
-            && pin.ssh_port == machine.spec.ssh.port,
+        pin.address == publication.server_address.to_string()
+            && pin.ssh_port == server.spec.ssh.port,
         "pinned address mismatch"
     );
     let credentials = context.store.credentials(&publication).await?;
@@ -95,7 +93,7 @@ pub(super) async fn ensure_publication(
     }
 
     if !record.reserved {
-        reserve_publication(record, machine, &pin, &generation, context).await?;
+        reserve_publication(record, server, &pin, &generation, context).await?;
 
         // Reservation may choose a different control port. Use the newly
         // persisted publication on the next pass before constructing Apply.
@@ -109,9 +107,9 @@ pub(super) async fn ensure_publication(
         // ten-minute revision bucket. A later bucket can repair a lost remote
         // unit while connectors independently reconnect; jobs serialize workers.
         let mut request = request_for(
-            machine,
+            server,
             Operation::Apply,
-            publication.machine_address,
+            publication.server_address,
             Some(&pin),
         );
         request.publication = Some(publication.clone());
@@ -122,12 +120,12 @@ pub(super) async fn ensure_publication(
         let revision = context.revision(&format!(
             "apply:{}:{}",
             record.config_hash,
-            serde_json::to_string(&machine.spec.ssh)?
+            serde_json::to_string(&server.spec.ssh)?
         ));
         match jobs::run(
             &context.client,
             &context.resources,
-            machine,
+            server,
             &request,
             &revision,
         )
@@ -279,16 +277,16 @@ pub(super) async fn cleanup_publication(
         return Ok(false);
     }
 
-    let mut machine = Machine::new(&publication.machine_name, record.machine_spec.clone());
-    machine.metadata.uid = Some(publication.machine_uid.clone());
-    let pin = context.store.pin(&publication.machine_uid).await?;
+    let mut server = Server::new(&publication.server_name, record.server_spec.clone());
+    server.metadata.uid = Some(publication.server_uid.clone());
+    let pin = context.store.pin(&publication.server_uid).await?;
 
     if !abandon && record.credential_generation.is_some() {
         let pin = pin.context("cannot clean remote publication without persisted host pin")?;
         let mut request = request_for(
-            &machine,
+            &server,
             Operation::Remove,
-            publication.machine_address,
+            publication.server_address,
             Some(&pin),
         );
         request.publication = Some(publication.clone());
@@ -296,7 +294,7 @@ pub(super) async fn cleanup_publication(
         match jobs::run(
             &context.client,
             &context.resources,
-            &machine,
+            &server,
             &request,
             &context.revision("remove"),
         )
@@ -332,7 +330,7 @@ pub(super) async fn cleanup_publication(
     context.store.delete_credentials(&publication.id).await?;
     context
         .store
-        .release(&publication.machine_uid, &publication.id)
+        .release(&publication.server_uid, &publication.id)
         .await?;
     context.store.delete_record(&publication.id).await?;
     Ok(true)
@@ -357,10 +355,10 @@ pub(super) async fn remote_operations_running(context: &Context, selector: &str)
     }))
 }
 
-pub fn publication_id(service_uid: &str, machine_uid: &str) -> String {
+pub fn publication_id(service_uid: &str, server_uid: &str) -> String {
     format!(
         "p-{}",
-        &hex::encode(Sha256::digest(format!("{service_uid}/{machine_uid}")))[..32]
+        &hex::encode(Sha256::digest(format!("{service_uid}/{server_uid}")))[..32]
     )
 }
 
@@ -370,7 +368,7 @@ pub(super) fn publication_hash(
 ) -> Result<String> {
     // Endpoint changes update policy only, preserving established connections.
     let value = json!({
-        "edge": publication.machine_address, "control": publication.control_port,
+        "edge": publication.server_address, "control": publication.control_port,
         "ip": publication.service.cluster_ip, "ports": publication.service.ports,
         "selector": publication.service.selector, "image": options.image,
         "pullPolicy": options.pull_policy, "worker": options.service_account,
@@ -411,7 +409,7 @@ pub(super) fn publication_metadata(
         labels: Some(BTreeMap::from([
             (MANAGED_LABEL.into(), "tunnellb".into()),
             (PUBLICATION_LABEL.into(), publication.id.clone()),
-            (MACHINE_LABEL.into(), publication.machine_name.clone()),
+            (SERVER_LABEL.into(), publication.server_name.clone()),
             (SERVICE_UID_LABEL.into(), publication.service.uid.clone()),
         ])),
         ..Default::default()

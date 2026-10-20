@@ -9,14 +9,14 @@ use super::{
     KIND_LABEL, MAX_ATTEMPTS, Store, config_map_value, delete_params, delete_result,
     publication_labels, resource_version, retryable_write, validate_id,
 };
-use crate::api::{BackendPort, MANAGED_LABEL, MachineSpec, Publication};
+use crate::api::{BackendPort, MANAGED_LABEL, Publication, ServerSpec};
 
 /// Desired/applied publication state. Credentials are stored separately.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicationRecord {
     pub publication: Publication,
-    pub machine_spec: MachineSpec,
+    pub server_spec: ServerSpec,
     pub backend_ports: Vec<BackendPort>,
     pub config_hash: String,
     pub applied_hash: Option<String>,
@@ -135,8 +135,8 @@ impl Store {
 fn ensure_same_publication_owner(previous: &Publication, next: &Publication) -> Result<()> {
     ensure!(
         previous.id == next.id
-            && previous.machine_uid == next.machine_uid
-            && previous.machine_name == next.machine_name
+            && previous.server_uid == next.server_uid
+            && previous.server_name == next.server_name
             && previous.service.uid == next.service.uid
             && previous.service.name == next.service.name
             && previous.service.namespace == next.service.namespace,

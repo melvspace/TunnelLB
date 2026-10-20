@@ -16,9 +16,9 @@ fn options() -> ResourceOptions {
 fn publication() -> Publication {
     Publication {
         id: "publication-123".into(),
-        machine_name: "edge-one".into(),
-        machine_uid: "machine-uid".into(),
-        machine_address: Ipv4Addr::new(203, 0, 113, 7),
+        server_name: "edge-one".into(),
+        server_uid: "server-uid".into(),
+        server_address: Ipv4Addr::new(203, 0, 113, 7),
         control_port: 21001,
         service: ServiceRequest {
             namespace: "application".into(),
@@ -35,7 +35,7 @@ fn publication() -> Publication {
                 protocol: Protocol::Tcp,
                 proxy_protocol: ProxyProtocol::None,
             }],
-            machines: vec!["edge-one".into()],
+            servers: vec!["edge-one".into()],
             pool: None,
             replicas: 1,
         },
@@ -71,7 +71,7 @@ fn job() -> Value {
         Ipv4Addr::new(203, 0, 113, 8),
         2222,
         "enroll-request",
-        "machine-key",
+        "server-key",
         "custom-ed25519",
         &options(),
     ))
@@ -116,7 +116,7 @@ fn connector_labels_bind_policy_and_deployment_to_the_exact_publication() {
     let expected = json!({
         "app.kubernetes.io/managed-by": "tunnellb",
         "tunnellb.io/publication": "publication-123",
-        "tunnellb.io/machine": "edge-one",
+        "tunnellb.io/server": "edge-one",
         "tunnellb.io/service-uid": "service-uid",
         "tunnellb.io/service-namespace": "application",
         "tunnellb.io/service-name": "web"
@@ -398,7 +398,7 @@ fn ssh_job_bounds_execution_and_scopes_worker_secrets() {
     assert_eq!(
         pod["volumes"][1]["secret"],
         json!({
-            "secretName": "machine-key", "defaultMode": 0o440, "optional": false,
+            "secretName": "server-key", "defaultMode": 0o440, "optional": false,
             "items": [{"key": "custom-ed25519", "path": "ssh-privatekey", "mode": 0o440}]
         })
     );

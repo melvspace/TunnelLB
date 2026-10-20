@@ -216,8 +216,8 @@ impl Run {
             "default assignment must create exactly one connector"
         );
         ensure!(
-            deployments[0]["metadata"]["labels"]["tunnellb.io/machine"] == self.machine,
-            "default assignment picked the wrong Machine"
+            deployments[0]["metadata"]["labels"]["tunnellb.io/server"] == self.server,
+            "default assignment picked the wrong Server"
         );
 
         Ok(deployments[0].clone())

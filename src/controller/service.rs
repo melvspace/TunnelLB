@@ -1,5 +1,5 @@
 use crate::{
-    api::{CLASS, Machine, Publication, SERVICE_UID_LABEL, ServiceRequest},
+    api::{CLASS, Publication, SERVICE_UID_LABEL, Server, ServiceRequest},
     store::PublicationRecord,
     validation,
 };
@@ -44,7 +44,7 @@ pub(super) async fn reconcile_service(
                 &context,
                 false,
                 "ReconcileFailed",
-                "Operation failed and will retry; check Machine and SSH Job state.",
+                "Operation failed and will retry; check Server and SSH Job state.",
                 None,
             )
             .await;
@@ -183,11 +183,11 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
         .await;
     }
 
-    let mut machines = Api::<Machine>::all(context.client.clone())
+    let mut servers = Api::<Server>::all(context.client.clone())
         .list(&ListParams::default())
         .await?
         .items;
-    machines.sort_by_key(ResourceExt::name_any);
+    servers.sort_by_key(ResourceExt::name_any);
     let nodes = Api::<Node>::all(context.client.clone())
         .list(&ListParams::default())
         .await?
@@ -197,7 +197,7 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
         service,
         &mut records,
         &request,
-        &machines,
+        &servers,
         &nodes,
         unavailable,
         context,
@@ -224,33 +224,33 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
         }
     };
 
-    for machine in &machines {
+    for server in &servers {
         if records.len() >= requested {
             break;
         }
 
-        if machine.status.as_ref().is_none_or(|s| s.phase != "Ready")
-            || duplicate_address(machine, &machines)
+        if server.status.as_ref().is_none_or(|s| s.phase != "Ready")
+            || duplicate_address(server, &servers)
             || records
                 .iter()
-                .any(|r| r.publication.machine_uid == machine.uid().unwrap_or_default())
+                .any(|r| r.publication.server_uid == server.uid().unwrap_or_default())
         {
             continue;
         }
 
         let Some(address) = eligible_address(
-            machine,
+            server,
             &request,
             &nodes,
-            context.config.allow_private_machines,
+            context.config.allow_private_servers,
         ) else {
             continue;
         };
-        let machine_uid = machine.uid().context("Machine UID missing")?;
-        let id = publication_id(&uid, &machine_uid);
+        let server_uid = server.uid().context("Server UID missing")?;
+        let id = publication_id(&uid, &server_uid);
         let control_port = match context
             .store
-            .allocate_unpublished(machine, &request, &id)
+            .allocate_unpublished(server, &request, &id)
             .await
         {
             Ok(port) => port,
@@ -259,16 +259,16 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
         };
         let publication = Publication {
             id,
-            machine_name: machine.name_any(),
-            machine_uid,
-            machine_address: address,
+            server_name: server.name_any(),
+            server_uid,
+            server_address: address,
             control_port,
             service: request.clone(),
         };
         let record = PublicationRecord {
             config_hash: publication_hash(&publication, &context.resources)?,
             publication,
-            machine_spec: machine.spec.clone(),
+            server_spec: server.spec.clone(),
             backend_ports: backend_ports.clone(),
             applied_hash: None,
             published: false,
@@ -283,16 +283,16 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
     let mut ready = records.len() == requested;
     let mut conflict = None;
     for record in &mut records {
-        let machine = machines
+        let server = servers
             .iter()
-            .find(|m| m.uid().as_deref() == Some(record.publication.machine_uid.as_str()))
-            .context("assigned Machine missing")?;
+            .find(|m| m.uid().as_deref() == Some(record.publication.server_uid.as_str()))
+            .context("assigned Server missing")?;
         // NetworkPolicy follows targetPort changes. The client still dials the
         // same ClusterIP and does not restart for ordinary backend Pod churn.
         let previous_hash = publication_hash(&record.publication, &context.resources)?;
         record.publication.service = request.clone();
         record.backend_ports = backend_ports.clone();
-        record.machine_spec = machine.spec.clone();
+        record.server_spec = server.spec.clone();
         record.config_hash = publication_hash(&record.publication, &context.resources)?;
 
         // Names and PROXY mode affect only frpc. The allocation check above
@@ -302,7 +302,7 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
         }
 
         context.store.save_record(record).await?;
-        match ensure_publication(record, machine, context).await {
+        match ensure_publication(record, server, context).await {
             Ok(published) => ready &= published,
             Err(error) => match error.downcast::<ReservationConflict>() {
                 Ok(reason) => {
@@ -336,7 +336,7 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
     let message = if ready {
         "Every requested edge has registered the publication."
     } else if records.len() < requested {
-        "Waiting for an eligible ready Machine with free ports."
+        "Waiting for an eligible ready Server with free ports."
     } else {
         "Waiting for remote provisioning or tunnel registration; previously published addresses are retained."
     };
@@ -356,7 +356,7 @@ async fn reconcile_assignments(
     service: &Service,
     records: &mut [PublicationRecord],
     request: &ServiceRequest,
-    machines: &[Machine],
+    servers: &[Server],
     nodes: &[Node],
     unavailable: bool,
     context: &Context,
@@ -365,13 +365,13 @@ async fn reconcile_assignments(
     let mut removing = false;
     let mut address_conflict = false;
     for record in records.iter() {
-        let machine = machines
+        let server = servers
             .iter()
-            .find(|m| m.uid().as_deref() == Some(record.publication.machine_uid.as_str()));
-        let eligible = machine.and_then(|m| {
-            eligible_address(m, request, nodes, context.config.allow_private_machines)
-        }) == Some(record.publication.machine_address);
-        let duplicate = machine.is_some_and(|m| duplicate_address(m, machines));
+            .find(|m| m.uid().as_deref() == Some(record.publication.server_uid.as_str()));
+        let eligible = server.and_then(|m| {
+            eligible_address(m, request, nodes, context.config.allow_private_servers)
+        }) == Some(record.publication.server_address);
+        let duplicate = server.is_some_and(|m| duplicate_address(m, servers));
 
         if !eligible || !same_allocation(&record.publication.service, request) {
             removing = true;
@@ -418,7 +418,7 @@ async fn reconcile_assignments(
             context,
             false,
             "AddressConflict",
-            "An assigned Machine shares its address; connectors are stopped and assignments retained.",
+            "An assigned Server shares its address; connectors are stopped and assignments retained.",
             Some(published_ips(records)),
         )
         .await?;
@@ -429,7 +429,7 @@ async fn reconcile_assignments(
     let requested = usize::from(request.replicas);
 
     if records.len() > requested {
-        records.sort_by_key(|r| r.publication.machine_name.clone());
+        records.sort_by_key(|r| r.publication.server_name.clone());
         for record in &records[requested..] {
             cleanup_publication(record, context, false).await?;
         }
@@ -464,31 +464,31 @@ fn same_allocation(previous: &ServiceRequest, next: &ServiceRequest) -> bool {
 }
 
 fn eligible_address(
-    machine: &Machine,
+    server: &Server,
     request: &ServiceRequest,
     nodes: &[Node],
     allow_private: bool,
 ) -> Option<Ipv4Addr> {
-    if !machine_permitted(machine, request) || machine.metadata.deletion_timestamp.is_some() {
+    if !server_permitted(server, request) || server.metadata.deletion_timestamp.is_some() {
         return None;
     }
 
-    validation::validate_machine(machine, nodes, allow_private).ok()
+    validation::validate_server(server, nodes, allow_private).ok()
 }
 
-fn duplicate_address(machine: &Machine, machines: &[Machine]) -> bool {
-    machines
+fn duplicate_address(server: &Server, servers: &[Server]) -> bool {
+    servers
         .iter()
-        .filter(|other| other.spec.address == machine.spec.address)
+        .filter(|other| other.spec.address == server.spec.address)
         .count()
         > 1
 }
 
-pub(super) fn machine_permitted(machine: &Machine, service: &ServiceRequest) -> bool {
-    (machine.spec.allowed_namespaces.is_empty()
-        || machine.spec.allowed_namespaces.contains(&service.namespace))
-        && (service.machines.is_empty() || service.machines.contains(&machine.name_any()))
-        && (service.pool.is_none() || machine.spec.pool == service.pool)
+pub(super) fn server_permitted(server: &Server, service: &ServiceRequest) -> bool {
+    (server.spec.allowed_namespaces.is_empty()
+        || server.spec.allowed_namespaces.contains(&service.namespace))
+        && (service.servers.is_empty() || service.servers.contains(&server.name_any()))
+        && (service.pool.is_none() || server.spec.pool == service.pool)
 }
 
 pub(super) fn is_managed(service: &Service) -> bool {
@@ -502,7 +502,7 @@ pub(super) fn published_ips(records: &[PublicationRecord]) -> Vec<String> {
     records
         .iter()
         .filter(|r| r.published)
-        .map(|r| r.publication.machine_address.to_string())
+        .map(|r| r.publication.server_address.to_string())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()

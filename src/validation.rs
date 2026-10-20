@@ -1,8 +1,8 @@
 //! Pure validation of administrator configuration and pod-backed publications.
 
 mod backends;
-mod machine;
 mod primitives;
+mod server;
 mod service;
 
 #[cfg(test)]
@@ -11,7 +11,7 @@ mod test_support;
 use thiserror::Error;
 
 pub use backends::validate_backends;
-pub use machine::validate_machine;
+pub use server::validate_server;
 pub use service::service_request;
 
 /// Callers can downcast `anyhow::Error` to distinguish absence from unsafe input.
@@ -19,8 +19,8 @@ pub use service::service_request;
 /// variants require revocation; never retain forwarding for an unverified Pod.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ValidationError {
-    #[error("InvalidMachine: {0}")]
-    InvalidMachine(String),
+    #[error("InvalidServer: {0}")]
+    InvalidServer(String),
     #[error("InvalidService: {0}")]
     InvalidService(String),
     #[error("UnsafeBackend: {0}")]

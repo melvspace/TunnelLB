@@ -1,9 +1,9 @@
 apiVersion: tunnellb.io/v1alpha1
-kind: Machine
+kind: Server
 metadata:
   name: edge-1
 spec:
-  # Documentation-only address: replace with your machine's public IPv4.
+  # Documentation-only address: replace with your server's public IPv4.
   address: "203.0.113.10"
   pool: public
   allowedNamespaces:

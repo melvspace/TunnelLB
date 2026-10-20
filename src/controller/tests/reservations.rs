@@ -2,11 +2,11 @@ use super::*;
 use crate::{allocation::Ledger, controller::reservation::commit_reservation};
 
 fn ledger_object(record: &PublicationRecord, control: u16) -> Value {
-    let machine = assigned_machine(record);
+    let server = assigned_server(record);
     let publication = &record.publication;
     let mut ledger = Ledger::default();
     ledger
-        .allocate(&publication.id, &publication.service, &machine)
+        .allocate(&publication.id, &publication.service, &server)
         .unwrap();
     ledger
         .allocations
@@ -15,7 +15,7 @@ fn ledger_object(record: &PublicationRecord, control: u16) -> Value {
         .control_port = control;
     let name = format!(
         "ports-{}",
-        &hex::encode(Sha256::digest(publication.machine_uid.as_bytes()))[..20]
+        &hex::encode(Sha256::digest(publication.server_uid.as_bytes()))[..20]
     );
 
     json!({
@@ -24,7 +24,7 @@ fn ledger_object(record: &PublicationRecord, control: u16) -> Value {
             "name": name, "namespace": OPERATOR, "uid": "ledger-uid", "resourceVersion": "3",
             "labels": {
                 MANAGED_LABEL: "tunnellb", "tunnellb.io/kind": "allocation",
-                "tunnellb.io/machine-uid": publication.machine_uid,
+                "tunnellb.io/server-uid": publication.server_uid,
             },
         },
         "data": {"ledger.json": serde_json::to_string(&ledger).unwrap()},
@@ -40,7 +40,7 @@ async fn remote_control_commit_recovers_after_record_write_failure_before_any_ap
     provisional.reserved = false;
     provisional.config_hash =
         publication_hash(&provisional.publication, &context.resources).unwrap();
-    let machine = assigned_machine(&provisional);
+    let server = assigned_server(&provisional);
     let selected = provisional.publication.control_port + 1;
     let ledger = ledger_object(&provisional, provisional.publication.control_port);
     let confirmed = ledger_object(&provisional, selected);
@@ -78,18 +78,18 @@ async fn remote_control_commit_recovers_after_record_write_failure_before_any_ap
     exchanges.extend(save_record(&recovered, &committed, 200));
     let (context, queue) = mock(exchanges);
     assert!(
-        commit_reservation(&mut provisional.clone(), &machine, selected, &context)
+        commit_reservation(&mut provisional.clone(), &server, selected, &context)
             .await
             .is_err()
     );
     assert!(
-        !ensure_publication(&mut provisional, &machine, &context)
+        !ensure_publication(&mut provisional, &server, &context)
             .await
             .unwrap()
     );
     assert!(!provisional.reserved);
     assert_eq!(provisional.publication.control_port, selected);
-    commit_reservation(&mut provisional, &machine, selected, &context)
+    commit_reservation(&mut provisional, &server, selected, &context)
         .await
         .unwrap();
     assert!(provisional.reserved);
@@ -100,11 +100,11 @@ async fn remote_control_commit_recovers_after_record_write_failure_before_any_ap
 #[tokio::test]
 async fn remote_answer_cannot_move_an_applied_publication_control_port() {
     let mut record = record();
-    let machine = assigned_machine(&record);
+    let server = assigned_server(&record);
     let selected = record.publication.control_port + 1;
     let (context, queue) = mock(vec![]);
     assert!(
-        commit_reservation(&mut record, &machine, selected, &context)
+        commit_reservation(&mut record, &server, selected, &context)
             .await
             .is_err()
     );

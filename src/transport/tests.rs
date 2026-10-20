@@ -4,9 +4,9 @@ use crate::api::{PublishedPort, ServiceRequest};
 fn publication() -> Publication {
     Publication {
         id: "pub-0123456789abcdef".into(),
-        machine_name: "edge".into(),
-        machine_uid: "c4a082c0-06f0-4b14-bf90-f5d975cbbf92".into(),
-        machine_address: "203.0.113.10".parse().unwrap(),
+        server_name: "edge".into(),
+        server_uid: "c4a082c0-06f0-4b14-bf90-f5d975cbbf92".into(),
+        server_address: "203.0.113.10".parse().unwrap(),
         control_port: 23456,
         service: ServiceRequest {
             namespace: "apps".into(),
@@ -28,7 +28,7 @@ fn publication() -> Publication {
                     proxy_protocol: ProxyProtocol::None,
                 },
             ],
-            machines: vec!["edge".into()],
+            servers: vec!["edge".into()],
             pool: None,
             replicas: 1,
         },
@@ -90,7 +90,7 @@ fn server_forces_tls_at_owned_paths_and_limits_public_ports() {
     assert_eq!(tls["force"], true);
     let directory = format!(
         "/var/lib/tunnellb/{}/publications/{}",
-        publication.machine_uid, publication.id
+        publication.server_uid, publication.id
     );
     assert_eq!(tls["certFile"], format!("{directory}/tls.crt"));
     assert_eq!(tls["keyFile"], format!("{directory}/tls.key"));
@@ -252,7 +252,7 @@ fn rejects_path_toml_and_go_template_injection() {
         assert_invalid(&publication);
 
         publication = self::publication();
-        publication.machine_uid = invalid.into();
+        publication.server_uid = invalid.into();
         assert_invalid(&publication);
     }
 
@@ -287,12 +287,12 @@ fn untrusted_metadata_is_never_rendered_and_reordering_is_stable() {
     let original_client = client_config(&publication, &credentials).unwrap();
     let original_server = server_config(&publication, &credentials).unwrap();
     let injection = "\"\n[[visitors]]\n{{.Envs.TOKEN}}";
-    publication.machine_name = injection.into();
+    publication.server_name = injection.into();
     publication.service.namespace = injection.into();
     publication.service.name = injection.into();
     publication.service.uid = injection.into();
     publication.service.pool = Some(injection.into());
-    publication.service.machines = vec![injection.into()];
+    publication.service.servers = vec![injection.into()];
     publication
         .service
         .selector

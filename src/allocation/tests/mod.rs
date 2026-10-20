@@ -1,10 +1,10 @@
 use super::*;
-use crate::api::{MachineSpec, PortRange, ProxyProtocol, PublishedPort, SecretReference, SshSpec};
+use crate::api::{PortRange, ProxyProtocol, PublishedPort, SecretReference, ServerSpec, SshSpec};
 
-fn machine() -> Machine {
-    let mut machine = Machine::new(
+fn server() -> Server {
+    let mut server = Server::new(
         "edge",
-        MachineSpec {
+        ServerSpec {
             address: "203.0.113.10".into(),
             ssh: SshSpec {
                 user: "root".into(),
@@ -23,8 +23,8 @@ fn machine() -> Machine {
             },
         },
     );
-    machine.metadata.uid = Some("machine-uid".into());
-    machine
+    server.metadata.uid = Some("server-uid".into());
+    server
 }
 
 fn service(uid: &str, ports: &[(Protocol, u16)]) -> ServiceRequest {
@@ -44,7 +44,7 @@ fn service(uid: &str, ports: &[(Protocol, u16)]) -> ServiceRequest {
                 proxy_protocol: ProxyProtocol::None,
             })
             .collect(),
-        machines: vec!["edge".into()],
+        servers: vec!["edge".into()],
         pool: None,
         replicas: 1,
     }
@@ -54,10 +54,10 @@ fn assert_rejected(
     ledger: &mut Ledger,
     id: &str,
     service: &ServiceRequest,
-    machine: &Machine,
+    server: &Server,
 ) -> anyhow::Error {
     let before = ledger.clone();
-    let error = ledger.allocate(id, service, machine).unwrap_err();
+    let error = ledger.allocate(id, service, server).unwrap_err();
     assert_eq!(
         *ledger, before,
         "failed allocation must leave the ledger unchanged"

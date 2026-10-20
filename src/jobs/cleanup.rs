@@ -19,7 +19,7 @@ use super::{
 };
 use crate::api::MANAGED_LABEL;
 
-/// Delete only this module's artifacts selected by the caller's Machine/publication scope.
+/// Delete only this module's artifacts selected by the caller's Server/publication scope.
 pub async fn cleanup(client: &Client, namespace: &str, selector: &str) -> Result<()> {
     let selector = if selector.is_empty() {
         format!("{MANAGED_LABEL}=tunnellb,{KIND_LABEL}=ssh-job")

@@ -130,15 +130,15 @@ fn remote_error(code: &str) -> &'static str {
         }
 
         "owner" => {
-            "host ownership marker is absent or belongs to another Machine UID; refusing takeover"
+            "host ownership marker is absent or belongs to another Server UID; refusing takeover"
         }
 
         "legacy-layout" => {
             "legacy single-owner TunnelLB layout detected; uninstall with the old worker and explicitly reset its retained ownership markers before shared-host enrollment"
         }
 
-        "machine-revoked" => {
-            "Machine UID was uninstalled; explicit administrator ownership reset is required before re-enrollment"
+        "server-revoked" => {
+            "Server UID was uninstalled; explicit administrator ownership reset is required before re-enrollment"
         }
 
         "generation-revoked" => {

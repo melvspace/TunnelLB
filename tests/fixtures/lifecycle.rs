@@ -125,8 +125,8 @@ impl Run {
     pub(super) fn deletion(&self) -> Result<()> {
         eprintln!("e2e: deletion revokes active TCP and removes owned remote files/units");
 
-        let machine = self.get(&self.operator, "machine", &self.machine)?;
-        let uid = machine["metadata"]["uid"].as_str().unwrap();
+        let server = self.get(&self.operator, "server", &self.server)?;
+        let uid = server["metadata"]["uid"].as_str().unwrap();
         let deployment = self.connector("echo")?;
         let publication = deployment["metadata"]["name"].as_str().unwrap();
         let unit = format!("tunnellb-{uid}@{publication}.service");
@@ -207,8 +207,8 @@ impl Run {
 
         self.env.kubectl(&[
             "delete",
-            "machine",
-            &self.machine,
+            "server",
+            &self.server,
             "--cascade=foreground",
             "--wait=true",
             "--timeout=150s",
@@ -227,7 +227,7 @@ impl Run {
                 self.env
                     .docker(&["cat", &format!("/var/lib/tunnellb/retired/{uid}")])?
             )? == uid,
-            "terminal Machine tombstone was not retained"
+            "terminal Server tombstone was not retained"
         );
         self.env
             .docker(&["test", "-x", "/opt/tunnellb/0.71.1/frps"])?;

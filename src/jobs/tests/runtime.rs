@@ -49,7 +49,7 @@ impl Exchange {
             let owners = body["metadata"]["ownerReferences"].as_array();
             assert!(
                 owners.is_none_or(Vec::is_empty),
-                "artifact must survive Machine deletion"
+                "artifact must survive Server deletion"
             );
             response
         })
@@ -152,14 +152,14 @@ fn created_artifacts() -> Vec<Exchange> {
 }
 
 fn earlier_job() -> Job {
-    Artifacts::new(&options(), &machine(), &request(), "earlier-revision")
+    Artifacts::new(&options(), &server(), &request(), "earlier-revision")
         .unwrap()
         .job
 }
 
 async fn reconcile(exchanges: Vec<Exchange>) -> Result<State> {
     let (client, queue) = mock(exchanges);
-    let result = run(&client, &options(), &machine(), &request(), "revision").await;
+    let result = run(&client, &options(), &server(), &request(), "revision").await;
     assert!(queue.lock().unwrap().is_empty());
     result
 }
@@ -190,7 +190,7 @@ async fn clean(exchanges: Vec<Exchange>, selector: &str) -> Result<()> {
 
 #[tokio::test]
 async fn foreign_create_conflict_is_not_adopted_or_followed_by_a_job() {
-    let foreign = machine_owned(secret());
+    let foreign = server_owned(secret());
     let mut exchanges = before_create(json!([]));
     exchanges.extend([
         Exchange::reply("POST", "secrets", 409, status(409)),
@@ -203,7 +203,7 @@ async fn foreign_create_conflict_is_not_adopted_or_followed_by_a_job() {
 
 #[tokio::test]
 async fn foreign_existing_policy_prevents_all_mutations() {
-    let foreign = machine_owned(policy());
+    let foreign = server_owned(policy());
     let mut exchanges = missing();
     exchanges[2] = Exchange::get("networkpolicies", foreign);
     assert!(reconcile(exchanges).await.is_err());
@@ -252,7 +252,7 @@ async fn create_order_owner_binding_and_repeated_reconciliation_are_idempotent()
 
     for _ in 0..2 {
         assert!(matches!(
-            run(&client, &options(), &machine(), &request(), "revision")
+            run(&client, &options(), &server(), &request(), "revision")
                 .await
                 .unwrap(),
             State::Pending
@@ -263,7 +263,7 @@ async fn create_order_owner_binding_and_repeated_reconciliation_are_idempotent()
 }
 
 #[tokio::test]
-async fn new_revision_waits_for_same_machine_across_publications() {
+async fn new_revision_waits_for_same_server_across_publications() {
     let mut older = earlier_job();
     older
         .metadata
@@ -285,21 +285,21 @@ async fn new_revision_ignores_finished_or_foreign_jobs() {
         .annotations
         .as_mut()
         .unwrap()
-        .insert(MACHINE_UID.into(), "other-machine-uid".into());
-    let mut other_machine = earlier_job();
-    other_machine
+        .insert(SERVER_UID.into(), "other-server-uid".into());
+    let mut other_server = earlier_job();
+    other_server
         .metadata
         .labels
         .as_mut()
         .unwrap()
-        .insert(api::MACHINE_LABEL.into(), "other-machine".into());
+        .insert(api::SERVER_LABEL.into(), "other-server".into());
 
     for older in [
         terminal(earlier_job(), "Complete"),
         terminal(earlier_job(), "Failed"),
         other_uid,
-        other_machine,
-        machine_owned(earlier_job()),
+        other_server,
+        server_owned(earlier_job()),
     ] {
         let mut exchanges = before_create(json!([older]));
         exchanges.extend(created_artifacts());
@@ -311,7 +311,7 @@ async fn new_revision_ignores_finished_or_foreign_jobs() {
 }
 
 #[tokio::test]
-async fn machine_job_list_errors_do_not_leak_credentials() {
+async fn server_job_list_errors_do_not_leak_credentials() {
     let mut exchanges = before_create(json!([]));
     let list = exchanges.last_mut().unwrap();
     list.status = 503;
@@ -364,7 +364,7 @@ async fn owner_patch_retries_only_the_same_verified_object() {
 
 #[tokio::test]
 async fn cleanup_preserves_foreign_credentials_connectors_and_pin_secrets() {
-    let foreign = machine_owned(job());
+    let foreign = server_owned(job());
     let mut connector = secret();
     connector
         .metadata
@@ -377,7 +377,7 @@ async fn cleanup_preserves_foreign_credentials_connectors_and_pin_secrets() {
         credentials.data = Some(BTreeMap::from([(key.into(), ByteString(vec![1]))]));
         credentials
     });
-    let foreign_policy = machine_owned(policy());
+    let foreign_policy = server_owned(policy());
     let mut exchanges = vec![
         Exchange::list("jobs", json!([job(), foreign])),
         Exchange::list(
@@ -399,7 +399,7 @@ async fn cleanup_preserves_foreign_credentials_connectors_and_pin_secrets() {
         }));
     }
 
-    clean(exchanges, &format!("{}=edge", api::MACHINE_LABEL))
+    clean(exchanges, &format!("{}=edge", api::SERVER_LABEL))
         .await
         .unwrap();
 }

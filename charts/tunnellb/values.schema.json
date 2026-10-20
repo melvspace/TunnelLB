@@ -9,7 +9,7 @@
     "resources",
     "networkPolicy",
     "requeueSeconds",
-    "allowPrivateMachines",
+    "allowPrivateServers",
     "logLevel"
   ],
   "properties": {
@@ -65,7 +65,7 @@
       }
     },
     "requeueSeconds": { "type": "integer", "minimum": 0 },
-    "allowPrivateMachines": { "type": "boolean" },
+    "allowPrivateServers": { "type": "boolean" },
     "logLevel": { "type": "string", "minLength": 1 }
   },
   "definitions": {

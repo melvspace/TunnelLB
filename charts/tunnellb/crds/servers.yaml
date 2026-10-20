@@ -1,15 +1,15 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: machines.tunnellb.io
+  name: servers.tunnellb.io
 spec:
   group: tunnellb.io
   names:
-    kind: Machine
-    plural: machines
+    kind: Server
+    plural: servers
     shortNames:
-    - tlbm
-    singular: machine
+    - tlbs
+    singular: server
   scope: Cluster
   versions:
   - additionalPrinterColumns:
@@ -22,12 +22,12 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Auto-generated derived type for MachineSpec via `CustomResource`
+        description: Auto-generated derived type for ServerSpec via `CustomResource`
         properties:
           spec:
             properties:
               address:
-                description: Existing IPv4 address of the external machine.
+                description: Existing IPv4 address of the external server.
                 type: string
               allowedNamespaces:
                 default: []
@@ -116,7 +116,7 @@ spec:
             type: object
         required:
         - spec
-        title: Machine
+        title: Server
         type: object
     served: true
     storage: true

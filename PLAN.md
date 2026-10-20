@@ -3,12 +3,12 @@
 ## Product contract
 
 Build a Rust operator using kube-rs. A cluster administrator registers a dedicated
-Debian/Ubuntu systemd machine with an existing public IPv4 address, SSH username
+Debian/Ubuntu systemd server with an existing public IPv4 address, SSH username
 and a reference to a Kubernetes SSH private-key Secret. The operator provisions
 and maintains FRP automatically. The supplied key must already be authorized and
 the account must be root or support noninteractive sudo.
 
-The remote machine is not a Kubernetes node or a member of the cluster's VPN.
+The remote server is not a Kubernetes node or a member of the cluster's VPN.
 Cluster-side connectors initiate authenticated, encrypted outbound tunnels.
 Only explicitly published, ordinary pod-backed Services are eligible. Application
 TLS terminates inside the cluster. TCP and UDP are supported; PROXY protocol is
@@ -18,28 +18,28 @@ Enrollment uses trust on first use for SSH host keys. Record the first key in
 operator-owned state and reject changes. Resetting host identity is an explicit
 administrator operation. First-contact identity is not independently verified.
 
-Administrators control Machine enrollment and namespace opt-in. Applications use
+Administrators control Server enrollment and namespace opt-in. Applications use
 `type: LoadBalancer`, `loadBalancerClass: tunnellb.io/edge`, and
-`allocateLoadBalancerNodePorts: false`. Annotations provide explicit Machine or
+`allocateLoadBalancerNodePorts: false`. Annotations provide explicit Server or
 pool selection, multiple entry points and per-port PROXY protocol.
 
 ## Allocation and lifecycle
 
-- Select one eligible Machine by default. Preserve assignments across controller
-  restarts and the arrival of additional Machines.
+- Select one eligible Server by default. Preserve assignments across controller
+  restarts and the arrival of additional Servers.
 - Allow several Services to share an address on disjoint numeric ports. FRP's
   server allowlist is numeric, so cross-publication TCP/UDP reuse is excluded.
   Reserve SSH and tunnel control ports. Never steal existing allocations.
-- Allow independent clusters to register the same host. Each Machine UID owns
+- Allow independent clusters to register the same host. Each Server UID owns
   its enrollment, credentials, units and terminal revocation marker. Root SSH
   administrators are mutually trusted.
 - Reserve public and control ports atomically on the host before applying a
   publication. Host reservations survive tunnel outages and arbitrate across
   cluster-local ledgers. Automatically choose an available control port in the
   requested range, then commit it locally before starting the connector.
-- Persist allocation ownership with Service and Machine UIDs and optimistic
+- Persist allocation ownership with Service and Server UIDs and optimistic
   concurrency. Service status is a projection, not the allocation database.
-- Several Machines provide independent addresses, not a floating IP or seamless
+- Several Servers provide independent addresses, not a floating IP or seamless
   connection failover.
 - Keep previously published addresses during transient outages and report
   degraded state. Reconnect without automatic DNS changes.
@@ -58,9 +58,9 @@ pool selection, multiple entry points and per-port PROXY protocol.
 
 ## Implementation
 
-1. Define the cluster-scoped `Machine` CRD with kube-rs, validated typed Service
+1. Define the cluster-scoped `Server` CRD with kube-rs, validated typed Service
    requests, backend validation and deterministic port allocation.
-2. Build FRP configuration and credentials for isolated Service/Machine
+2. Build FRP configuration and credentials for isolated Service/Server
    publications. Use an independent FRP server instance and control port per
    publication to avoid a global client credential or an unverified server-plugin
    authorization model. The remote host is still untrusted.
@@ -76,7 +76,7 @@ pool selection, multiple entry points and per-port PROXY protocol.
    of rules in its own pod network namespace; the exposed process receives no
    capabilities. Never use host networking. Validate the supported kube-proxy
    networking path rather than claiming support for every CNI implementation.
-6. Implement kube-rs reconciliation for Machines and Services, persistent
+6. Implement kube-rs reconciliation for Servers and Services, persistent
    allocations, asynchronous Jobs, conditions, finalizers, immutable
    publication configuration, status publication using `ipMode: Proxy`, and
    recovery after interrupted operations.
@@ -98,13 +98,13 @@ pool selection, multiple entry points and per-port PROXY protocol.
   independent credentials, a hostile peer's inability to select arbitrary local
   destinations, and process-based session revocation.
 - Test real SSH enrollment, first-key persistence, changed-key rejection,
-  idempotent installation and owned cleanup against a disposable machine.
+  idempotent installation and owned cleanup against a disposable server.
 - Exercise the operator in a disposable local Kubernetes cluster: namespace
   authorization, Service status, backend churn, controller restart, remote
   outage/reconnection, collisions and deletion with active connections.
 - Exercise two independent clusters sharing one disposable host: concurrent
   durable numeric claims, automatic control-port selection, cross-cluster
-  conflicts, cleanup isolation and reuse by a new Machine UID. Verify that
+  conflicts, cleanup isolation and reuse by a new Server UID. Verify that
   delayed reservation/apply operations cannot restore revoked generations.
 - Test network guards against API, node, LAN and unpublished destinations on the
   supported networking configuration. Report the actual scope of evidence;

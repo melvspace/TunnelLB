@@ -1,4 +1,4 @@
-//! Atomic numeric port claims shared by every Machine on a host.
+//! Atomic numeric port claims shared by every Server on a host.
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, ensure};

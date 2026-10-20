@@ -4,7 +4,7 @@ pub(super) fn destination_ipv4(ip: Ipv4Addr) -> bool {
     let [a, b, _, _] = ip.octets();
 
     // Pod and Service networks may legitimately use shared address space, unlike
-    // public Machines. Callers must still validate the corresponding API objects.
+    // public Servers. Callers must still validate the corresponding API objects.
     a != 0 && a != 127 && a < 224 && !(a == 169 && b == 254)
 }
 

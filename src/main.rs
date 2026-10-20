@@ -10,7 +10,7 @@ use anyhow::{Result, anyhow, ensure};
 use clap::{Args, Parser, Subcommand};
 use kube::CustomResourceExt;
 use tracing_subscriber::EnvFilter;
-use tunnellb::{api::Machine, connector, controller, provision};
+use tunnellb::{api::Server, connector, controller, provision};
 
 const DEFAULT_READY_PATH: &str = "/tmp/tunnellb-ready";
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
@@ -27,9 +27,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Reconcile Machines and LoadBalancer Services.
+    /// Reconcile Servers and LoadBalancer Services.
     Controller(controller::Config),
-    /// Print the Machine CustomResourceDefinition as YAML.
+    /// Print the Server CustomResourceDefinition as YAML.
     Crd,
     /// Install the worker pod's egress guard before starting its main process.
     Guard(GuardArgs),
@@ -108,7 +108,7 @@ async fn main() -> ExitCode {
 async fn dispatch(command: Command) -> Result<()> {
     match command {
         Command::Controller(config) => controller::run(config).await,
-        Command::Crd => Ok(serde_yaml::to_writer(io::stdout().lock(), &Machine::crd())?),
+        Command::Crd => Ok(serde_yaml::to_writer(io::stdout().lock(), &Server::crd())?),
         Command::Guard(args) => match (args.config, args.allow) {
             (Some(config), None) => connector::apply_guard(&config).await,
             (None, Some(address)) => connector::apply_allow(address).await,
@@ -205,7 +205,7 @@ mod tests {
             "address": "203.0.113.1",
             "sshUser": "operator",
             "sshPort": 22,
-            "machineUid": "55555555-5555-4555-8555-555555555555",
+            "serverUid": "55555555-5555-4555-8555-555555555555",
             "publication": null,
             "serverConfig": null,
             "serverCertificate": null,

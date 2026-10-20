@@ -11,7 +11,7 @@ pub(super) struct Run {
     pub(super) scratch: TempDir,
     pub(super) app: String,
     pub(super) operator: String,
-    pub(super) machine: String,
+    pub(super) server: String,
     image_tag: String,
     pub(super) installed: bool,
     resources_created: bool,
@@ -30,7 +30,7 @@ impl Run {
             scratch,
             app: format!("{name}-app"),
             operator: format!("{name}-system"),
-            machine: format!("{name}-edge"),
+            server: format!("{name}-edge"),
             image_tag: env::var("TUNNELLB_E2E_IMAGE_TAG").unwrap_or_else(|_| "0.1.0".into()),
             installed: false,
             resources_created: false,
@@ -84,12 +84,12 @@ impl Run {
             .as_array()
             .context("CRD list missing")?
             .iter()
-            .any(|crd| crd["metadata"]["name"] == "machines.tunnellb.io")
+            .any(|crd| crd["metadata"]["name"] == "servers.tunnellb.io")
         {
-            let machines = self.env.json(&["get", "machines", "-o", "json"])?;
+            let servers = self.env.json(&["get", "servers", "-o", "json"])?;
             ensure!(
-                machines["items"].as_array().is_some_and(Vec::is_empty),
-                "remove prior test Machines before starting this suite's controller"
+                servers["items"].as_array().is_some_and(Vec::is_empty),
+                "remove prior test Servers before starting this suite's controller"
             );
         }
 
@@ -188,7 +188,7 @@ impl Run {
                 "--set",
                 "createNamespace=false",
                 "--set",
-                "allowPrivateMachines=true",
+                "allowPrivateServers=true",
                 "--set",
                 "requeueSeconds=2",
                 "--set-string",
@@ -200,15 +200,15 @@ impl Run {
             None,
             150,
         )?;
-        self.create_machine()
+        self.create_server()
     }
 
-    pub(super) fn create_machine(&self) -> Result<()> {
+    pub(super) fn create_server(&self) -> Result<()> {
         self.env.apply(&json!({
             "apiVersion": "tunnellb.io/v1alpha1",
-            "kind": "Machine",
+            "kind": "Server",
             "metadata": {
-                "name": self.machine,
+                "name": self.server,
                 "labels": {"tunnellb.io/e2e": self.app}
             },
             "spec": {
@@ -283,10 +283,7 @@ impl Run {
                 "services",
                 vec!["-n", &self.app, "get", "services", "-o", "json"],
             ),
-            (
-                "machine",
-                vec!["get", "machine", &self.machine, "-o", "json"],
-            ),
+            ("server", vec!["get", "server", &self.server, "-o", "json"]),
             (
                 "controller",
                 vec![
@@ -309,7 +306,7 @@ impl Run {
             return Ok(());
         }
 
-        // Delete publications and the Machine while their controller can perform
+        // Delete publications and the Server while their controller can perform
         // remote cleanup. Never strip finalizers or delete another run's objects.
         if self.installed {
             self.env
@@ -327,13 +324,13 @@ impl Run {
             self.env
                 .kubectl(&[
                     "delete",
-                    "machine",
-                    &self.machine,
+                    "server",
+                    &self.server,
                     "--ignore-not-found",
                     "--wait=true",
                     "--timeout=150s",
                 ])
-                .context("Machine cleanup remains pending")?;
+                .context("Server cleanup remains pending")?;
             checked(
                 "helm",
                 &[
@@ -381,8 +378,8 @@ impl Drop for Run {
 
             if enabled("TUNNELLB_E2E_KEEP_ON_FAILURE") {
                 eprintln!(
-                    "e2e: explicitly preserving failed namespaces {} / {} and Machine {}",
-                    self.operator, self.app, self.machine
+                    "e2e: explicitly preserving failed namespaces {} / {} and Server {}",
+                    self.operator, self.app, self.server
                 );
                 self.scratch.disable_cleanup(true);
 

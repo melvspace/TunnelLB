@@ -36,9 +36,9 @@ pub(super) fn run() -> Result<()> {
     a.enrollment()?;
     b.setup()?;
     b.enrollment()?;
-    let uid_a = machine_uid(&a)?;
-    let uid_b = machine_uid(&b)?;
-    ensure!(uid_a != uid_b, "Machine UIDs must differ across clusters");
+    let uid_a = server_uid(&a)?;
+    let uid_b = server_uid(&b)?;
+    ensure!(uid_a != uid_b, "Server UIDs must differ across clusters");
 
     eprintln!("e2e: shared IPv4, shared SSH key, automatic default-range controls");
     a.backend_on(18080, 18081)?;
@@ -81,9 +81,9 @@ pub(super) fn run() -> Result<()> {
     let process_before = process_identity(&b, &unit_b)?;
     let connector_before = b.connector("echo")?;
     let mut stream_b = connect(b.env.address, 18180)?;
-    let first = exchange(&mut stream_b, "before-other-machine-delete")?;
+    let first = exchange(&mut stream_b, "before-other-server-delete")?;
     let mut check_survivor = || -> Result<()> {
-        let reply = exchange(&mut stream_b, "other-machine-lifecycle")?;
+        let reply = exchange(&mut stream_b, "other-server-lifecycle")?;
         ensure!(
             reply["connection_id"] == first["connection_id"],
             "B's established TCP connection changed"
@@ -92,19 +92,19 @@ pub(super) fn run() -> Result<()> {
     };
     let binary_before = text(b.env.docker(&["sha256sum", "/opt/tunnellb/0.71.1/frps"])?)?;
     a.env
-        .kubectl(&["delete", "machine", &a.machine, "--wait=false"])?;
+        .kubectl(&["delete", "server", &a.server, "--wait=false"])?;
     wait_for(
-        "Machine A deletion with uninterrupted B traffic",
+        "Server A deletion with uninterrupted B traffic",
         180,
         || {
             check_survivor()?;
-            let machines = a.env.json(&["get", "machines", "-o", "json"])?;
+            let servers = a.env.json(&["get", "servers", "-o", "json"])?;
 
-            Ok(machines["items"]
+            Ok(servers["items"]
                 .as_array()
-                .context("Machine list missing")?
+                .context("Server list missing")?
                 .iter()
-                .all(|machine| machine["metadata"]["uid"] != uid_a))
+                .all(|server| server["metadata"]["uid"] != uid_a))
         },
     )?;
     retired(&a, &uid_a)?;
@@ -135,20 +135,20 @@ pub(super) fn run() -> Result<()> {
             .iter()
             .all(|service| service["metadata"]["name"] != "echo"))
     })?;
-    eprintln!("e2e: a new Machine UID reuses A's numeric public ports");
-    a.create_machine()?;
-    wait_for("replacement Machine enrollment", 180, || {
+    eprintln!("e2e: a new Server UID reuses A's numeric public ports");
+    a.create_server()?;
+    wait_for("replacement Server enrollment", 180, || {
         check_survivor()?;
 
-        Ok(a.get(&a.operator, "machine", &a.machine)?["status"]["phase"] == "Ready")
+        Ok(a.get(&a.operator, "server", &a.server)?["status"]["phase"] == "Ready")
     })?;
-    let uid_c = machine_uid(&a)?;
+    let uid_c = server_uid(&a)?;
     ensure!(uid_c != uid_a && uid_c != uid_b);
     a.env.apply(&a.service("echo", 18080, 18081, false))?;
     a.published_while("echo", &mut check_survivor)?;
     let publication_c = publication(&a)?;
     ensure!(
-        publication_c.machine_uid == uid_c
+        publication_c.server_uid == uid_c
             && publication_c.control_port != publication_b.control_port
             && (range.start..=range.end).contains(&publication_c.control_port)
     );
@@ -173,9 +173,9 @@ pub(super) fn run() -> Result<()> {
         let result = runtime.block_on(provision::run(request, &a.env.key, a.scratch.path()));
         let error = result
             .err()
-            .context("retired Machine UID accepted a stale request")?;
+            .context("retired Server UID accepted a stale request")?;
         ensure!(
-            error.to_string().contains("Machine UID was uninstalled"),
+            error.to_string().contains("Server UID was uninstalled"),
             "stale request failed without confirming terminal UID rejection: {error}"
         );
     }
@@ -278,11 +278,11 @@ fn conflicts(a: &Run, b: &Run) -> Result<()> {
     Ok(())
 }
 
-fn machine_uid(run: &Run) -> Result<String> {
+fn server_uid(run: &Run) -> Result<String> {
     Ok(
-        run.get(&run.operator, "machine", &run.machine)?["metadata"]["uid"]
+        run.get(&run.operator, "server", &run.server)?["metadata"]["uid"]
             .as_str()
-            .context("Machine UID missing")?
+            .context("Server UID missing")?
             .to_owned(),
     )
 }
@@ -306,7 +306,7 @@ fn reserve_result(run: &Run, service_uid: &str) -> Result<Option<AllocationOutco
     let jobs = run.list(
         &run.operator,
         "jobs",
-        &format!("tunnellb.io/machine={}", run.machine),
+        &format!("tunnellb.io/server={}", run.server),
     )?;
 
     for job in jobs.iter().filter(|job| job["status"]["succeeded"] == 1) {
@@ -326,7 +326,7 @@ fn saved_request(run: &Run, operation: Operation) -> Result<Request> {
     let jobs = run.list(
         &run.operator,
         "jobs",
-        &format!("tunnellb.io/machine={}", run.machine),
+        &format!("tunnellb.io/server={}", run.server),
     )?;
 
     for job in jobs.iter().filter(|job| job["status"]["succeeded"] == 1) {

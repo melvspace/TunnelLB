@@ -2,15 +2,15 @@ use super::*;
 
 #[test]
 fn idempotent_retries_preserve_control_even_when_a_lower_port_is_free() {
-    let machine = machine();
+    let server = server();
     let mut ledger = Ledger::default();
     let a = service("a", &[(Protocol::Tcp, 443)]);
     let b = service("b", &[(Protocol::Tcp, 8080), (Protocol::Udp, 53)]);
-    ledger.allocate("a", &a, &machine).unwrap();
-    assert_eq!(ledger.allocate("b", &b, &machine).unwrap(), 20001);
+    ledger.allocate("a", &a, &server).unwrap();
+    assert_eq!(ledger.allocate("b", &b, &server).unwrap(), 20001);
     ledger.release("a");
     let before = ledger.clone();
-    assert_eq!(ledger.allocate("b", &b, &machine).unwrap(), 20001);
+    assert_eq!(ledger.allocate("b", &b, &server).unwrap(), 20001);
     assert_eq!(ledger, before);
     let mut updated = b;
     updated.ports.reverse();
@@ -18,19 +18,19 @@ fn idempotent_retries_preserve_control_even_when_a_lower_port_is_free() {
     updated.ports[0].proxy_protocol = ProxyProtocol::V2;
     updated.cluster_ip = "10.96.1.20".parse().unwrap();
     updated.selector = BTreeMap::from([("app".into(), "new-backend".into())]);
-    updated.machines.clear();
+    updated.servers.clear();
     updated.pool = Some("pool".into());
     updated.replicas = 3;
-    assert_eq!(ledger.allocate("b", &updated, &machine).unwrap(), 20001);
+    assert_eq!(ledger.allocate("b", &updated, &server).unwrap(), 20001);
     assert_eq!(ledger, before);
 }
 
 #[test]
 fn publication_id_cannot_be_reassigned_to_another_owner_or_reservation_set() {
-    let machine = machine();
+    let server = server();
     let original = service("a", &[(Protocol::Tcp, 443)]);
     let mut ledger = Ledger::default();
-    ledger.allocate("p", &original, &machine).unwrap();
+    ledger.allocate("p", &original, &server).unwrap();
     let mut changes = vec![original.clone(); 6];
     changes[0].uid = "new-service-uid".into();
     changes[1].name = "renamed-service".into();
@@ -42,21 +42,21 @@ fn publication_id_cannot_be_reassigned_to_another_owner_or_reservation_set() {
         .push(service("unused", &[(Protocol::Udp, 53)]).ports.remove(0));
 
     for changed in changes {
-        assert_rejected(&mut ledger, "p", &changed, &machine);
+        assert_rejected(&mut ledger, "p", &changed, &server);
     }
 
-    assert_rejected(&mut ledger, "other-id", &original, &machine);
+    assert_rejected(&mut ledger, "other-id", &original, &server);
 }
 
 #[test]
-fn publication_id_cannot_move_to_another_machine_identity_or_address() {
-    let original = machine();
+fn publication_id_cannot_move_to_another_server_identity_or_address() {
+    let original = server();
     let service = service("a", &[(Protocol::Tcp, 443)]);
     let mut ledger = Ledger::default();
     ledger.allocate("p", &service, &original).unwrap();
     let mut changes = vec![original.clone(); 3];
-    changes[0].metadata.uid = Some("new-machine-uid".into());
-    changes[1].metadata.name = Some("another-machine-name".into());
+    changes[0].metadata.uid = Some("new-server-uid".into());
+    changes[1].metadata.name = Some("another-server-name".into());
     changes[2].spec.address = "203.0.113.11".into();
 
     for changed in changes {
@@ -65,8 +65,8 @@ fn publication_id_cannot_move_to_another_machine_identity_or_address() {
 }
 
 #[test]
-fn address_aliases_and_recreated_machine_objects_share_collision_scope() {
-    let original = machine();
+fn address_aliases_and_recreated_server_objects_share_collision_scope() {
+    let original = server();
     let mut ledger = Ledger::default();
     ledger
         .allocate("a", &service("a", &[(Protocol::Tcp, 443)]), &original)
@@ -108,10 +108,10 @@ fn address_aliases_and_recreated_machine_objects_share_collision_scope() {
 }
 
 #[test]
-fn independent_machines_can_reuse_public_and_control_ports() {
-    let first = machine();
-    let mut other = machine();
-    other.metadata.name = Some("other-machine".into());
+fn independent_servers_can_reuse_public_and_control_ports() {
+    let first = server();
+    let mut other = server();
+    other.metadata.name = Some("other-server".into());
     other.metadata.uid = Some("other-uid".into());
     other.spec.address = "203.0.113.11".into();
     let service = service("a", &[(Protocol::Tcp, 443)]);
@@ -122,10 +122,10 @@ fn independent_machines_can_reuse_public_and_control_ports() {
 
 #[test]
 fn aliases_cannot_bypass_each_others_ssh_or_administrator_exclusions() {
-    let mut original = machine();
+    let mut original = server();
     original.spec.ssh.port = 2222;
     original.spec.reserved_ports = vec![8443, 20001];
-    let mut alias = machine();
+    let mut alias = server();
     alias.metadata.name = Some("alias".into());
     alias.metadata.uid = Some("alias-uid".into());
     let mut ledger = Ledger::default();
@@ -154,7 +154,7 @@ fn aliases_cannot_bypass_each_others_ssh_or_administrator_exclusions() {
 
 #[test]
 fn policy_changes_cannot_silently_replace_an_existing_control_port() {
-    let original = machine();
+    let original = server();
     let service = service("a", &[(Protocol::Tcp, 443)]);
     let mut ledger = Ledger::default();
     ledger.allocate("p", &service, &original).unwrap();
@@ -182,8 +182,8 @@ fn policy_changes_cannot_silently_replace_an_existing_control_port() {
 }
 
 #[test]
-fn invalid_machine_identity_address_or_port_policy_is_rejected() {
-    let original = machine();
+fn invalid_server_identity_address_or_port_policy_is_rejected() {
+    let original = server();
     let service = service("a", &[(Protocol::Tcp, 443)]);
     let mut ledger = Ledger::default();
     let mut changes = vec![original; 11];

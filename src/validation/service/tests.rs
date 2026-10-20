@@ -109,10 +109,10 @@ fn service_ports_reject_bad_ranges_protocols_and_ambiguous_names() {
 fn valid_selection_annotations_and_proxy_protocol_are_typed() {
     let mut v = service_value();
     v["metadata"]["annotations"] =
-        json!({MACHINES:"edge-a, edge-b", REPLICAS:"2", PROXY_PROTOCOL:"http=v1"});
+        json!({SERVERS:"edge-a, edge-b", REPLICAS:"2", PROXY_PROTOCOL:"http=v1"});
     let request = request_with(v).unwrap();
 
-    assert_eq!(request.machines, vec!["edge-a", "edge-b"]);
+    assert_eq!(request.servers, vec!["edge-a", "edge-b"]);
     assert_eq!(request.replicas, 2);
     assert_eq!(request.ports[0].proxy_protocol, ProxyProtocol::V1);
 
@@ -127,9 +127,9 @@ fn valid_selection_annotations_and_proxy_protocol_are_typed() {
 }
 
 #[test]
-fn explicit_machine_list_implies_replicas_and_rejects_selection_ambiguity() {
+fn explicit_server_list_implies_replicas_and_rejects_selection_ambiguity() {
     let mut v = service_value();
-    v["metadata"]["annotations"] = json!({MACHINES: "one,two"});
+    v["metadata"]["annotations"] = json!({SERVERS: "one,two"});
 
     assert_eq!(request_with(v.clone()).unwrap().replicas, 2);
 
@@ -148,7 +148,7 @@ fn explicit_machine_list_implies_replicas_and_rejects_selection_ambiguity() {
 fn malformed_annotations_never_fall_back_to_defaults() {
     for (key, values) in [
         (
-            MACHINES,
+            SERVERS,
             vec![
                 "",
                 " ",

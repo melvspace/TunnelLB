@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use super::{
     State,
     artifacts::{Artifacts, verify_job, verify_policy, verify_secret},
-    identity::{Identity, JOB_UID, KIND_LABEL, MACHINE_UID, REQUEST_HASH, job_reference},
+    identity::{Identity, JOB_UID, KIND_LABEL, REQUEST_HASH, SERVER_UID, job_reference},
     outcome::{RESULT_LIMIT, WORKER, result},
 };
 use crate::api::PUBLICATION_LABEL;
@@ -27,10 +27,10 @@ use serde_json::{Value, json};
 const NAMESPACE: &str = "operator";
 const SECRET: &str = "sentinel-secret-must-never-escape";
 
-fn machine() -> api::Machine {
+fn server() -> api::Server {
     serde_json::from_value(json!({
-        "apiVersion": "tunnellb.io/v1alpha1", "kind": "Machine",
-        "metadata": {"name": "edge", "uid": "machine-123"},
+        "apiVersion": "tunnellb.io/v1alpha1", "kind": "Server",
+        "metadata": {"name": "edge", "uid": "server-123"},
         "spec": {
             "address": "203.0.113.5",
             "ssh": {"user": "root", "port": 22, "privateKeySecretRef": {"name": "administrator-key"}}
@@ -45,7 +45,7 @@ fn request() -> provision::Request {
         address: "203.0.113.5".parse().unwrap(),
         ssh_user: "root".into(),
         ssh_port: 22,
-        machine_uid: "machine-123".into(),
+        server_uid: "server-123".into(),
         publication: None,
         server_config: Some(format!("auth.token = \"{SECRET}\"")),
         server_certificate: Some(SECRET.into()),
@@ -74,7 +74,7 @@ fn mutated<T: serde::Serialize + serde::de::DeserializeOwned>(
 }
 
 fn artifacts() -> Artifacts {
-    let mut artifacts = Artifacts::new(&options(), &machine(), &request(), "revision").unwrap();
+    let mut artifacts = Artifacts::new(&options(), &server(), &request(), "revision").unwrap();
 
     for (metadata, uid, version) in [
         (&mut artifacts.job.metadata, "job-123", "10"),
@@ -115,8 +115,8 @@ fn attached<K: Resource>(mut artifact: K) -> K {
     artifact
 }
 
-fn machine_owned<K: Resource>(mut artifact: K) -> K {
-    artifact.meta_mut().owner_references = Some(vec![machine().controller_owner_ref(&()).unwrap()]);
+fn server_owned<K: Resource>(mut artifact: K) -> K {
+    artifact.meta_mut().owner_references = Some(vec![server().controller_owner_ref(&()).unwrap()]);
     artifact
 }
 

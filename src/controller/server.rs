@@ -1,5 +1,5 @@
 use crate::{
-    api::{MACHINE_LABEL, Machine, MachineStatus},
+    api::{SERVER_LABEL, Server, ServerStatus},
     jobs::{self, State},
     provision::{Operation, Request},
     store::HostPin,
@@ -22,43 +22,43 @@ use super::{
     publication::{cleanup_publication, remote_operations_running, terminate_connector},
 };
 
-pub(super) async fn reconcile_machine(
-    machine: Arc<Machine>,
+pub(super) async fn reconcile_server(
+    server: Arc<Server>,
     context: Arc<Context>,
 ) -> Result<Action, ReconcileError> {
     let _lock = context.serial.lock().await;
-    match machine_inner(&machine, &context).await {
+    match server_inner(&server, &context).await {
         Ok(()) => Ok(context.action()),
         Err(_) => {
-            let _ = machine_status(&machine, &context, "Degraded", "ReconcileFailed",
+            let _ = server_status(&server, &context, "Degraded", "ReconcileFailed",
                 "Operation failed; inspect SSH Job state and configuration. Credentials are never included in errors.").await;
             Err(ReconcileError)
         }
     }
 }
 
-pub(super) async fn machine_inner(machine: &Machine, context: &Context) -> Result<()> {
-    let machines: Api<Machine> = Api::all(context.client.clone());
+pub(super) async fn server_inner(server: &Server, context: &Context) -> Result<()> {
+    let servers: Api<Server> = Api::all(context.client.clone());
 
-    if machine.metadata.deletion_timestamp.is_some() {
-        return delete_machine(machine, context).await;
+    if server.metadata.deletion_timestamp.is_some() {
+        return delete_server(server, context).await;
     }
 
     let nodes = Api::<Node>::all(context.client.clone())
         .list(&ListParams::default())
         .await?;
-    let address = match validation::validate_machine(
-        machine,
+    let address = match validation::validate_server(
+        server,
         &nodes.items,
-        context.config.allow_private_machines,
+        context.config.allow_private_servers,
     ) {
         Ok(address) => address,
         Err(error) => {
-            return machine_status(
-                machine,
+            return server_status(
+                server,
                 context,
                 "Invalid",
-                "InvalidMachine",
+                "InvalidServer",
                 &error.to_string(),
             )
             .await;
@@ -66,77 +66,77 @@ pub(super) async fn machine_inner(machine: &Machine, context: &Context) -> Resul
     };
     // Duplicate addresses would give two independent ledgers authority over the
     // same host. Refuse both; an existing host owner also enforces UID ownership.
-    let all = machines.list(&ListParams::default()).await?;
+    let all = servers.list(&ListParams::default()).await?;
 
     if all
         .items
         .iter()
-        .any(|other| other.uid() != machine.uid() && other.spec.address == machine.spec.address)
+        .any(|other| other.uid() != server.uid() && other.spec.address == server.spec.address)
     {
         for record in context
             .store
-            .records(&format!("{MACHINE_LABEL}={}", machine.name_any()))
+            .records(&format!("{SERVER_LABEL}={}", server.name_any()))
             .await?
         {
             terminate_connector(&record.publication, context).await?;
         }
 
-        return machine_status(
-            machine,
+        return server_status(
+            server,
             context,
             "Invalid",
             "AddressConflict",
-            "Each edge address must belong to exactly one Machine.",
+            "Each edge address must belong to exactly one Server.",
         )
         .await;
     }
 
-    if !has_finalizer(machine) {
-        set_finalizer(&machines, machine, true).await?;
+    if !has_finalizer(server) {
+        set_finalizer(&servers, server, true).await?;
 
         return Ok(());
     }
 
-    let uid = machine.uid().context("Machine has no UID")?;
+    let uid = server.uid().context("Server has no UID")?;
     let pin = context.store.pin(&uid).await?;
 
     if let Some(pin) = &pin
-        && (pin.address != machine.spec.address || pin.ssh_port != machine.spec.ssh.port)
+        && (pin.address != server.spec.address || pin.ssh_port != server.spec.ssh.port)
     {
-        return machine_status(
-            machine,
+        return server_status(
+            server,
             context,
             "Invalid",
             "PinnedAddressChanged",
-            "Delete and clean up the Machine before changing its SSH address or port.",
+            "Delete and clean up the Server before changing its SSH address or port.",
         )
         .await;
     }
 
-    let enrolled_revision = enrollment_revision(machine, context)?;
+    let enrolled_revision = enrollment_revision(server, context)?;
 
     if pin.is_none()
-        || machine
+        || server
             .status
             .as_ref()
             .and_then(|s| s.enrolled_revision.as_ref())
             != Some(&enrolled_revision)
     {
-        let request = request_for(machine, Operation::Enroll, address, pin.as_ref());
+        let request = request_for(server, Operation::Enroll, address, pin.as_ref());
         let revision = context.revision(&format!("enroll:{enrolled_revision}"));
         match jobs::run(
             &context.client,
             &context.resources,
-            machine,
+            server,
             &request,
             &revision,
         )
         .await?
         {
             State::Pending => {
-                if machine.status.as_ref().is_none_or(|s| s.phase != "Ready") {
-                    machine_status(
-                        machine,
+                if server.status.as_ref().is_none_or(|s| s.phase != "Ready") {
+                    server_status(
+                        server,
                         context,
                         "Pending",
                         "Enrolling",
@@ -147,7 +147,7 @@ pub(super) async fn machine_inner(machine: &Machine, context: &Context) -> Resul
             }
 
             State::Failed(_) => {
-                machine_status(machine, context, "Degraded", "SSHFailed", "SSH provisioning failed; check host identity, key, sudo and systemd prerequisites.").await?;
+                server_status(server, context, "Degraded", "SSHFailed", "SSH provisioning failed; check host identity, key, sudo and systemd prerequisites.").await?;
             }
 
             State::Complete(outcome) => {
@@ -159,16 +159,16 @@ pub(super) async fn machine_inner(machine: &Machine, context: &Context) -> Resul
                             known_hosts: outcome.known_hosts,
                             fingerprint: outcome.fingerprint,
                             address: address.to_string(),
-                            ssh_port: machine.spec.ssh.port,
+                            ssh_port: server.spec.ssh.port,
                         },
                     )
                     .await?;
 
                 if outcome.architecture.is_empty() {
-                    machine_status(machine, context, "Pending", "HostKeyPinned", "First-seen host key persisted; installation will use strict host-key verification.").await?;
+                    server_status(server, context, "Pending", "HostKeyPinned", "First-seen host key persisted; installation will use strict host-key verification.").await?;
                 } else {
-                    machine_status(
-                        machine,
+                    server_status(
+                        server,
                         context,
                         "Ready",
                         "Enrolled",
@@ -178,9 +178,9 @@ pub(super) async fn machine_inner(machine: &Machine, context: &Context) -> Resul
                 }
             }
         }
-    } else if machine.status.as_ref().is_some_and(|s| s.phase != "Ready") {
-        machine_status(
-            machine,
+    } else if server.status.as_ref().is_some_and(|s| s.phase != "Ready") {
+        server_status(
+            server,
             context,
             "Ready",
             "Enrolled",
@@ -192,27 +192,27 @@ pub(super) async fn machine_inner(machine: &Machine, context: &Context) -> Resul
     Ok(())
 }
 
-pub(super) async fn delete_machine(machine: &Machine, context: &Context) -> Result<()> {
-    if !has_finalizer(machine) {
+pub(super) async fn delete_server(server: &Server, context: &Context) -> Result<()> {
+    if !has_finalizer(server) {
         return Ok(());
     }
 
-    let uid = machine.uid().context("Machine UID missing")?;
-    let abandon = force_delete(machine);
+    let uid = server.uid().context("Server UID missing")?;
+    let abandon = force_delete(server);
     let mut complete = true;
     for record in context
         .store
-        .records(&format!("{MACHINE_LABEL}={}", machine.name_any()))
+        .records(&format!("{SERVER_LABEL}={}", server.name_any()))
         .await?
     {
-        if record.publication.machine_uid == uid {
+        if record.publication.server_uid == uid {
             complete &= cleanup_publication(&record, context, abandon).await?;
         }
     }
 
     if !complete {
-        return machine_status(
-            machine,
+        return server_status(
+            server,
             context,
             "Deleting",
             "CleanupPending",
@@ -221,15 +221,13 @@ pub(super) async fn delete_machine(machine: &Machine, context: &Context) -> Resu
         .await;
     }
 
-    if remote_operations_running(context, &format!("{MACHINE_LABEL}={}", machine.name_any()))
-        .await?
-    {
+    if remote_operations_running(context, &format!("{SERVER_LABEL}={}", server.name_any())).await? {
         return Ok(());
     }
 
     if !abandon && let Some(pin) = context.store.pin(&uid).await? {
         let request = request_for(
-            machine,
+            server,
             Operation::Uninstall,
             pin.address.parse()?,
             Some(&pin),
@@ -237,14 +235,14 @@ pub(super) async fn delete_machine(machine: &Machine, context: &Context) -> Resu
         match jobs::run(
             &context.client,
             &context.resources,
-            machine,
+            server,
             &request,
             &context.revision("uninstall"),
         )
         .await?
         {
             State::Pending | State::Failed(_) => {
-                return machine_status(machine, context, "Deleting", "CleanupPending", "Remote uninstall is pending; force-delete explicitly abandons remote resources.").await;
+                return server_status(server, context, "Deleting", "CleanupPending", "Remote uninstall is pending; force-delete explicitly abandons remote resources.").await;
             }
 
             State::Complete(_) => {}
@@ -254,17 +252,17 @@ pub(super) async fn delete_machine(machine: &Machine, context: &Context) -> Resu
     jobs::cleanup(
         &context.client,
         &context.config.namespace,
-        &format!("{MACHINE_LABEL}={}", machine.name_any()),
+        &format!("{SERVER_LABEL}={}", server.name_any()),
     )
     .await?;
     context.store.gc_allocations(&uid, &BTreeSet::new()).await?;
     context.store.delete_ledger(&uid).await?;
     context.store.delete_pin(&uid).await?;
-    set_finalizer(&Api::<Machine>::all(context.client.clone()), machine, false).await
+    set_finalizer(&Api::<Server>::all(context.client.clone()), server, false).await
 }
 
 pub(super) fn request_for(
-    machine: &Machine,
+    server: &Server,
     operation: Operation,
     address: Ipv4Addr,
     pin: Option<&HostPin>,
@@ -272,9 +270,9 @@ pub(super) fn request_for(
     Request {
         operation,
         address,
-        ssh_user: machine.spec.ssh.user.clone(),
-        ssh_port: machine.spec.ssh.port,
-        machine_uid: machine.uid().unwrap_or_default(),
+        ssh_user: server.spec.ssh.user.clone(),
+        ssh_port: server.spec.ssh.port,
+        server_uid: server.uid().unwrap_or_default(),
         publication: None,
         server_config: None,
         server_certificate: None,
@@ -285,44 +283,44 @@ pub(super) fn request_for(
     }
 }
 
-pub(super) fn enrollment_revision(machine: &Machine, context: &Context) -> Result<String> {
+pub(super) fn enrollment_revision(server: &Server, context: &Context) -> Result<String> {
     Ok(hex::encode(Sha256::digest(serde_json::to_vec(&json!({
-        "image": context.resources.image, "ssh": machine.spec.ssh,
-        "request": machine.annotations().get("tunnellb.io/re-enroll")
+        "image": context.resources.image, "ssh": server.spec.ssh,
+        "request": server.annotations().get("tunnellb.io/re-enroll")
     }))?)))
 }
 
-pub(super) async fn machine_status(
-    machine: &Machine,
+pub(super) async fn server_status(
+    server: &Server,
     context: &Context,
     phase: &str,
     reason: &str,
     message: &str,
 ) -> Result<()> {
-    let status = MachineStatus {
+    let status = ServerStatus {
         enrolled_revision: if phase == "Ready" {
-            Some(enrollment_revision(machine, context)?)
+            Some(enrollment_revision(server, context)?)
         } else {
-            machine
+            server
                 .status
                 .as_ref()
                 .and_then(|s| s.enrolled_revision.clone())
         },
-        observed_generation: machine.metadata.generation.unwrap_or(0),
+        observed_generation: server.metadata.generation.unwrap_or(0),
         phase: phase.into(),
         reason: reason.into(),
         message: message.into(),
     };
 
-    if machine.status.as_ref() == Some(&status) {
+    if server.status.as_ref() == Some(&status) {
         return Ok(());
     }
 
-    Api::<Machine>::all(context.client.clone())
+    Api::<Server>::all(context.client.clone())
         .patch_status(
-            &machine.name_any(),
+            &server.name_any(),
             &PatchParams::default(),
-            &Patch::Merge(json!({"metadata": {"uid": machine.uid(), "resourceVersion": machine.resource_version()}, "status": status})),
+            &Patch::Merge(json!({"metadata": {"uid": server.uid(), "resourceVersion": server.resource_version()}, "status": status})),
         )
         .await?;
     Ok(())

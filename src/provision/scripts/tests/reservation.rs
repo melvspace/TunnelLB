@@ -7,9 +7,9 @@ use crate::{
 
 fn owner_request(owner: &str, port: u16) -> Request {
     let mut request = request(Operation::Reserve);
-    request.machine_uid = owner.into();
+    request.server_uid = owner.into();
     let publication = request.publication.as_mut().unwrap();
-    publication.machine_uid = owner.into();
+    publication.server_uid = owner.into();
     publication.service.ports.truncate(1);
     publication.service.ports[0].port = port;
     refresh_config(&mut request);
@@ -41,7 +41,7 @@ fn choose(host: &TestHost, request: &mut Request) -> u16 {
 fn claim(host: &TestHost, request: &Request) -> std::path::PathBuf {
     host.path(&format!(
         "state/claims/{}/{}.claim",
-        request.machine_uid,
+        request.server_uid,
         request.publication.as_ref().unwrap().id
     ))
 }
@@ -64,7 +64,7 @@ fn two_owners_apply_and_partial_uninstall_preserves_the_other_owner() {
     host.failure(uninstall_script(&first).unwrap(), "stop");
     assert!(claim(&host, &first).exists());
     assert!(host.active(&first).exists());
-    host.failure(reserve_script(&first).unwrap(), "machine-revoked");
+    host.failure(reserve_script(&first).unwrap(), "server-revoked");
     std::fs::remove_file(host.path("fail-stop")).unwrap();
     host.flag("fail-owned-delete");
     host.failure(uninstall_script(&first).unwrap(), "command");
@@ -98,7 +98,7 @@ fn interrupted_claim_commit_replays_whole_record_without_partial_port_claims() {
     std::fs::create_dir(&pending).unwrap();
     std::fs::write(pending.join("owner"), "incomplete").unwrap();
     std::fs::write(
-        host.path("state/claims/machine-uid/ignored.claim.pending.123"),
+        host.path("state/claims/server-uid/ignored.claim.pending.123"),
         "incomplete",
     )
     .unwrap();
@@ -331,7 +331,7 @@ fn reserved_only_cleanup_and_stale_remove_leave_replacement_claim_untouched() {
     assert_eq!(std::fs::read(claim(&host, &replacement)).unwrap(), before);
     host.success(uninstall_script(&replacement).unwrap());
     assert!(!claim(&host, &replacement).exists());
-    host.failure(reserve_script(&replacement).unwrap(), "machine-revoked");
+    host.failure(reserve_script(&replacement).unwrap(), "server-revoked");
 }
 
 #[test]

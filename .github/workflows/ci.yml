@@ -45,8 +45,8 @@ jobs:
       - name: Check generated CRD consistency
         run: |
           mkdir -p /tmp/codex
-          cargo run --locked -- crd > /tmp/codex/machines.yaml
-          diff -u charts/tunnellb/crds/machines.yaml /tmp/codex/machines.yaml
+          cargo run --locked -- crd > /tmp/codex/servers.yaml
+          diff -u charts/tunnellb/crds/servers.yaml /tmp/codex/servers.yaml
 
   helm:
     name: Helm chart validation

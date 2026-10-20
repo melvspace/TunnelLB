@@ -57,8 +57,8 @@ spec:
               value: {{ .Values.image.pullPolicy | quote }}
             - name: TUNNELLB_WORKER_SERVICE_ACCOUNT
               value: tunnellb-worker
-            - name: TUNNELLB_ALLOW_PRIVATE_MACHINES
-              value: {{ .Values.allowPrivateMachines | quote }}
+            - name: TUNNELLB_ALLOW_PRIVATE_SERVERS
+              value: {{ .Values.allowPrivateServers | quote }}
             - name: TUNNELLB_HEALTH_ADDRESS
               value: "0.0.0.0:8080"
             {{- if .Values.requeueSeconds }}

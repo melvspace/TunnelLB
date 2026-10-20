@@ -9,18 +9,18 @@ pub const CLASS: &str = "tunnellb.io/edge";
 pub const FINALIZER: &str = "tunnellb.io/cleanup";
 pub const ENABLED_LABEL: &str = "tunnellb.io/enabled";
 pub const MANAGED_LABEL: &str = "app.kubernetes.io/managed-by";
-pub const MACHINE_LABEL: &str = "tunnellb.io/machine";
+pub const SERVER_LABEL: &str = "tunnellb.io/server";
 pub const SERVICE_UID_LABEL: &str = "tunnellb.io/service-uid";
 pub const PUBLICATION_LABEL: &str = "tunnellb.io/publication";
 
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[kube(group = "tunnellb.io", version = "v1alpha1", kind = "Machine")]
-#[kube(status = "MachineStatus", shortname = "tlbm")]
+#[kube(group = "tunnellb.io", version = "v1alpha1", kind = "Server")]
+#[kube(status = "ServerStatus", shortname = "tlbs")]
 #[kube(printcolumn = r#"{"name":"Address","type":"string","jsonPath":".spec.address"}"#)]
 #[kube(printcolumn = r#"{"name":"Phase","type":"string","jsonPath":".status.phase"}"#)]
 #[serde(rename_all = "camelCase")]
-pub struct MachineSpec {
-    /// Existing IPv4 address of the external machine.
+pub struct ServerSpec {
+    /// Existing IPv4 address of the external server.
     pub address: String,
     pub ssh: SshSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -76,7 +76,7 @@ impl Default for PortRange {
 
 #[derive(Debug, Default, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct MachineStatus {
+pub struct ServerStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enrolled_revision: Option<String>,
     #[serde(default)]
@@ -138,7 +138,7 @@ pub struct ServiceRequest {
     pub cluster_ip: Ipv4Addr,
     pub selector: BTreeMap<String, String>,
     pub ports: Vec<PublishedPort>,
-    pub machines: Vec<String>,
+    pub servers: Vec<String>,
     pub pool: Option<String>,
     pub replicas: u16,
 }
@@ -161,9 +161,9 @@ pub struct ValidatedService {
 #[serde(rename_all = "camelCase")]
 pub struct Publication {
     pub id: String,
-    pub machine_name: String,
-    pub machine_uid: String,
-    pub machine_address: Ipv4Addr,
+    pub server_name: String,
+    pub server_uid: String,
+    pub server_address: Ipv4Addr,
     pub control_port: u16,
     pub service: ServiceRequest,
 }

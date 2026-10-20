@@ -30,7 +30,7 @@ use crate::{api, provision, resources};
 pub async fn run(
     client: &Client,
     options: &resources::ResourceOptions,
-    machine: &api::Machine,
+    server: &api::Server,
     request: &provision::Request,
     revision: &str,
 ) -> Result<State> {
@@ -39,7 +39,7 @@ pub async fn run(
         job: wanted_job,
         secret: wanted_secret,
         policy: wanted_policy,
-    } = Artifacts::new(options, machine, request, revision)?;
+    } = Artifacts::new(options, server, request, revision)?;
 
     let jobs: Api<Job> = Api::namespaced(client.clone(), &options.namespace);
     let secrets: Api<Secret> = Api::namespaced(client.clone(), &options.namespace);
@@ -73,7 +73,7 @@ pub async fn run(
         return Ok(State::Pending);
     }
 
-    if existing_job.is_none() && machine_has_pending_job(&jobs, &identity).await? {
+    if existing_job.is_none() && server_has_pending_job(&jobs, &identity).await? {
         return Ok(State::Pending);
     }
 
@@ -115,14 +115,14 @@ pub async fn run(
     Ok(result(request, &job, &candidates))
 }
 
-/// A pending Job blocks new requests for this Machine incarnation across
+/// A pending Job blocks new requests for this Server incarnation across
 /// publications and revisions. Existing desired Jobs must still be polled.
-async fn machine_has_pending_job(jobs: &Api<Job>, identity: &Identity) -> Result<bool> {
+async fn server_has_pending_job(jobs: &Api<Job>, identity: &Identity) -> Result<bool> {
     let selector = format!(
         "{}=tunnellb,{KIND_LABEL}=ssh-job,{}={}",
         api::MANAGED_LABEL,
-        api::MACHINE_LABEL,
-        identity.machine
+        api::SERVER_LABEL,
+        identity.server
     );
     let listed = jobs
         .list(&ListParams::default().labels(&selector))
@@ -134,8 +134,8 @@ async fn machine_has_pending_job(jobs: &Api<Job>, identity: &Identity) -> Result
             return false;
         };
 
-        candidate.machine == identity.machine
-            && candidate.machine_uid == identity.machine_uid
+        candidate.server == identity.server
+            && candidate.server_uid == identity.server_uid
             && candidate.verify(&job.metadata, None).is_ok()
             && phase(job) == Phase::Pending
     }))

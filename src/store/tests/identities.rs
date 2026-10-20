@@ -51,7 +51,7 @@ async fn credential_creation_returns_persisted_winner_without_rotation() {
 async fn credentials_reject_foreign_and_incomplete_existing_secrets() {
     for problem in [
         SERVICE_UID_LABEL,
-        MACHINE_UID_LABEL,
+        SERVER_UID_LABEL,
         MANAGED_LABEL,
         "tls.key",
         "mutable",
@@ -89,7 +89,7 @@ async fn credentials_reject_foreign_and_incomplete_existing_secrets() {
 
 #[tokio::test]
 async fn pin_creation_accepts_only_identical_persisted_pin() {
-    let url = path("secrets", &machine_state_name("host", "machine-uid"));
+    let url = path("secrets", &server_state_name("host", "server-uid"));
 
     for conflict in [false, true] {
         for changed in [false, true] {
@@ -119,7 +119,7 @@ async fn pin_creation_accepts_only_identical_persisted_pin() {
 
             let (store, queue) = mock(exchanges);
             assert_eq!(
-                store.save_pin("machine-uid", &proposed).await.is_ok(),
+                store.save_pin("server-uid", &proposed).await.is_ok(),
                 !changed
             );
             assert!(queue.lock().unwrap().is_empty());
@@ -129,7 +129,7 @@ async fn pin_creation_accepts_only_identical_persisted_pin() {
 
 #[tokio::test]
 async fn pin_rejects_foreign_or_corrupt_state_and_endpoint_changes() {
-    let url = path("secrets", &machine_state_name("host", "machine-uid"));
+    let url = path("secrets", &server_state_name("host", "server-uid"));
 
     for problem in ["foreign", "uid", "corrupt", "mutable", "address", "port"] {
         let mut secret = pin_object();
@@ -142,7 +142,7 @@ async fn pin_rejects_foreign_or_corrupt_state_and_endpoint_changes() {
                     .labels
                     .as_mut()
                     .unwrap()
-                    .insert(MACHINE_UID_LABEL.into(), "other-machine".into());
+                    .insert(SERVER_UID_LABEL.into(), "other-server".into());
             }
 
             "corrupt" => secret.data = None,
@@ -152,7 +152,7 @@ async fn pin_rejects_foreign_or_corrupt_state_and_endpoint_changes() {
         }
 
         let (store, queue) = mock(vec![Exchange::reply("GET", &url, 200, json!(secret))]);
-        assert!(store.save_pin("machine-uid", &proposed).await.is_err());
+        assert!(store.save_pin("server-uid", &proposed).await.is_err());
         assert!(queue.lock().unwrap().is_empty());
     }
 }

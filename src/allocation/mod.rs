@@ -1,15 +1,15 @@
 //! In-memory reservations; the controller persists the complete ledger using CAS.
 //!
-//! A compatible retry has the same Service namespace/name/UID, Machine name/UID
+//! A compatible retry has the same Service namespace/name/UID, Server name/UID
 //! and IPv4 address, and exact set of public `(protocol, port)` pairs. It retains
-//! its control port, which must still satisfy the current Machine policy.
+//! its control port, which must still satisfy the current Server policy.
 //! Backend, port-name, PROXY protocol and selection metadata do not own sockets
 //! and may change without reallocating. Changing ownership, address or public
 //! reservations requires explicit release after the old publication is stopped.
 //!
 //! FRP's allowPorts authorizes numbers without a protocol qualifier. Different
 //! publications therefore cannot share any public/control port number on the
-//! same Machine/address. One publication may expose TCP and UDP on the same
+//! same Server/address. One publication may expose TCP and UDP on the same
 //! number, but its control port must be distinct from all of its public ports.
 
 mod control;
@@ -22,19 +22,19 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use crate::api::{Machine, Protocol, ServiceRequest};
+use crate::api::{Protocol, Server, ServiceRequest};
 
-/// Expected capacity failures for which a caller may try another Machine.
+/// Expected capacity failures for which a caller may try another Server.
 /// Validation, ownership and persistence failures deliberately do not use this type.
 #[derive(Debug, thiserror::Error)]
 pub enum AllocationConflict {
     #[error(
-        "public port {port} is already allocated or reserved on this Machine/address regardless of protocol"
+        "public port {port} is already allocated or reserved on this Server/address regardless of protocol"
     )]
     PortUnavailable { port: u16 },
     #[error("SSH or administrator exclusions conflict with allocation {publication_id}")]
     ReservedPorts { publication_id: String },
-    #[error("no TCP control ports available in the Machine range")]
+    #[error("no TCP control ports available in the Server range")]
     ControlRangeExhausted,
 }
 
@@ -51,14 +51,14 @@ pub struct Allocation {
     pub service_namespace: String,
     pub service_name: String,
     pub service_uid: String,
-    pub machine_name: String,
-    pub machine_uid: String,
-    pub machine_address: Ipv4Addr,
+    pub server_name: String,
+    pub server_uid: String,
+    pub server_address: Ipv4Addr,
     pub ports: BTreeSet<PortReservation>,
     pub control_port: u16,
     /// SSH and administrator-reserved ports, protected for both protocols.
     ///
-    /// Keeping this snapshot prevents another Machine object for the same host
+    /// Keeping this snapshot prevents another Server object for the same host
     /// from bypassing these exclusions. A compatible retry refreshes its snapshot;
     /// other live allocations keep their exclusions until refreshed or released.
     pub reserved_ports: BTreeSet<u16>,
@@ -69,21 +69,21 @@ impl Allocation {
         self.service_namespace == requested.service_namespace
             && self.service_name == requested.service_name
             && self.service_uid == requested.service_uid
-            && self.machine_name == requested.machine_name
-            && self.machine_uid == requested.machine_uid
+            && self.server_name == requested.server_name
+            && self.server_uid == requested.server_uid
     }
 
     fn compatible_with(&self, requested: &Self) -> bool {
         self.same_owner(requested)
-            && self.machine_address == requested.machine_address
+            && self.server_address == requested.server_address
             && self.ports == requested.ports
     }
 
-    fn shares_machine_with(&self, other: &Self) -> bool {
+    fn shares_server_with(&self, other: &Self) -> bool {
         // A recreated object or an address alias must not hide an old lease.
-        self.machine_name == other.machine_name
-            || self.machine_uid == other.machine_uid
-            || self.machine_address == other.machine_address
+        self.server_name == other.server_name
+            || self.server_uid == other.server_uid
+            || self.server_address == other.server_address
     }
 
     fn validate(&self) -> Result<()> {
@@ -91,8 +91,8 @@ impl Allocation {
             ("Service namespace", self.service_namespace.as_str()),
             ("Service name", self.service_name.as_str()),
             ("Service UID", self.service_uid.as_str()),
-            ("Machine name", self.machine_name.as_str()),
-            ("Machine UID", self.machine_uid.as_str()),
+            ("Server name", self.server_name.as_str()),
+            ("Server UID", self.server_uid.as_str()),
         ] {
             validate_id(kind, value)?;
         }
@@ -148,52 +148,52 @@ impl Ledger {
     ///
     /// Control ports are chosen in ascending order. A compatible allocation keeps
     /// its existing control port, even if a lower port has since become available.
-    /// Within this ledger, conflicts are checked by Machine name, UID or address.
+    /// Within this ledger, conflicts are checked by Server name, UID or address.
     /// Callers using separate ledgers must arbitrate reservations on the shared
     /// host and persist each result with optimistic concurrency before use.
     pub fn allocate(
         &mut self,
         publication_id: &str,
         service: &ServiceRequest,
-        machine: &Machine,
+        server: &Server,
     ) -> Result<u16> {
         validate_id("publication ID", publication_id)?;
-        let machine_name = machine
+        let server_name = server
             .metadata
             .name
             .as_deref()
-            .context("Machine name is required")?;
-        let machine_uid = machine
+            .context("Server name is required")?;
+        let server_uid = server
             .metadata
             .uid
             .as_deref()
-            .context("Machine UID is required")?;
+            .context("Server UID is required")?;
 
         for (kind, value) in [
             ("Service namespace", service.namespace.as_str()),
             ("Service name", service.name.as_str()),
             ("Service UID", service.uid.as_str()),
-            ("Machine name", machine_name),
-            ("Machine UID", machine_uid),
+            ("Server name", server_name),
+            ("Server UID", server_uid),
         ] {
             validate_id(kind, value)?;
         }
 
-        let range = machine.spec.control_port_range;
+        let range = server.spec.control_port_range;
         ensure!(
             range.start != 0 && range.start <= range.end,
             "control port range must be nonzero and ordered"
         );
         ensure!(
-            machine.spec.ssh.port != 0,
+            server.spec.ssh.port != 0,
             "SSH port must be greater than zero"
         );
-        let mut reserved_ports: BTreeSet<_> = machine.spec.reserved_ports.iter().copied().collect();
+        let mut reserved_ports: BTreeSet<_> = server.spec.reserved_ports.iter().copied().collect();
         ensure!(
             !reserved_ports.contains(&0),
             "reserved ports must be greater than zero"
         );
-        reserved_ports.insert(machine.spec.ssh.port);
+        reserved_ports.insert(server.spec.ssh.port);
 
         ensure!(
             !service.ports.is_empty(),
@@ -218,13 +218,13 @@ impl Ledger {
             service_namespace: service.namespace.clone(),
             service_name: service.name.clone(),
             service_uid: service.uid.clone(),
-            machine_name: machine_name.to_owned(),
-            machine_uid: machine_uid.to_owned(),
-            machine_address: machine
+            server_name: server_name.to_owned(),
+            server_uid: server_uid.to_owned(),
+            server_address: server
                 .spec
                 .address
                 .parse()
-                .context("Machine address must be IPv4")?,
+                .context("Server address must be IPv4")?,
             ports,
             control_port: 0,
             reserved_ports,
@@ -236,7 +236,7 @@ impl Ledger {
         let existing_control = if let Some(existing) = next.allocations.get(publication_id) {
             ensure!(
                 existing.compatible_with(&requested),
-                "publication {publication_id} already has a different owner, Machine or reservation set"
+                "publication {publication_id} already has a different owner, Server or reservation set"
             );
             Some(existing.control_port)
         } else {
@@ -247,7 +247,7 @@ impl Ledger {
         let mut excluded = requested.reserved_ports.clone();
 
         for (id, existing) in &next.allocations {
-            if id == publication_id || !existing.shares_machine_with(&requested) {
+            if id == publication_id || !existing.shares_server_with(&requested) {
                 continue;
             }
 
@@ -305,7 +305,7 @@ impl Ledger {
         &mut self,
         publication_id: &str,
         service: &ServiceRequest,
-        machine: &Machine,
+        server: &Server,
     ) -> Result<u16> {
         // Releasing first must not erase evidence of malformed or foreign state.
         self.validate()?;
@@ -315,15 +315,15 @@ impl Ledger {
                 existing.service_namespace == service.namespace
                     && existing.service_name == service.name
                     && existing.service_uid == service.uid
-                    && Some(existing.machine_name.as_str()) == machine.metadata.name.as_deref()
-                    && Some(existing.machine_uid.as_str()) == machine.metadata.uid.as_deref(),
+                    && Some(existing.server_name.as_str()) == server.metadata.name.as_deref()
+                    && Some(existing.server_uid.as_str()) == server.metadata.uid.as_deref(),
                 "unpublished reservation ownership cannot change"
             );
         }
 
         let mut replacement = self.clone();
         replacement.release(publication_id);
-        let port = replacement.allocate(publication_id, service, machine)?;
+        let port = replacement.allocate(publication_id, service, server)?;
         *self = replacement;
 
         Ok(port)
@@ -331,7 +331,7 @@ impl Ledger {
 
     fn validate(&self) -> Result<()> {
         // Validate all rows before considering cross-row conflicts. Scope by all
-        // three identities used by shares_machine_with, with numeric port sets
+        // three identities used by shares_server_with, with numeric port sets
         // matching FRP's authorization semantics.
         for (id, allocation) in &self.allocations {
             validate_id("stored publication ID", id)?;
@@ -347,9 +347,9 @@ impl Ledger {
             ports.insert(allocation.control_port);
 
             for identity in [
-                format!("name:{}", allocation.machine_name),
-                format!("uid:{}", allocation.machine_uid),
-                format!("address:{}", allocation.machine_address),
+                format!("name:{}", allocation.server_name),
+                format!("uid:{}", allocation.server_uid),
+                format!("address:{}", allocation.server_address),
             ] {
                 let (occupied, reserved) = scopes.entry(identity).or_default();
                 ensure!(

@@ -20,13 +20,13 @@ fn validate_component(value: &str, name: &str) -> Result<()> {
 }
 
 pub(super) fn validate_request(request: &Request) -> Result<()> {
-    validate_component(&request.machine_uid, "Machine UID")?;
+    validate_component(&request.server_uid, "Server UID")?;
     ensure!(
         !matches!(
-            request.machine_uid.as_str(),
+            request.server_uid.as_str(),
             "claims" | "retired" | "schema" | "owner" | "uninstalled"
         ),
-        "Machine UID conflicts with a reserved host state directory"
+        "Server UID conflicts with a reserved host state directory"
     );
     ensure!(request.ssh_port != 0, "SSH port must be nonzero");
     ensure!(
@@ -64,8 +64,8 @@ pub(super) fn validate_request(request: &Request) -> Result<()> {
             .context("publication is required for reserve/apply/remove")?;
         validate_component(&publication.id, "publication ID")?;
         ensure!(
-            publication.machine_uid == request.machine_uid,
-            "publication belongs to another Machine UID"
+            publication.server_uid == request.server_uid,
+            "publication belongs to another Server UID"
         );
         let generation = request
             .generation
@@ -83,7 +83,7 @@ pub(super) fn validate_request(request: &Request) -> Result<()> {
         // backend, address, or credentials. Only its ownership identity matters.
         if matches!(request.operation, Operation::Reserve | Operation::Apply) {
             ensure!(
-                publication.machine_address == request.address,
+                publication.server_address == request.address,
                 "publication address does not match the SSH target"
             );
             ensure!(
@@ -227,7 +227,7 @@ mod tests {
             "",
         ] {
             let mut request = request(Operation::Apply);
-            request.machine_uid = value.into();
+            request.server_uid = value.into();
             assert!(validate_request(&request).is_err());
         }
 
@@ -262,7 +262,7 @@ mod tests {
         request.server_certificate = None;
         request.server_private_key = None;
         validate_request(&request).unwrap();
-        request.publication.as_mut().unwrap().machine_uid = "other".into();
+        request.publication.as_mut().unwrap().server_uid = "other".into();
         assert!(validate_request(&request).is_err());
     }
 
@@ -284,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn leading_underscore_account_matches_machine_validation() {
+    fn leading_underscore_account_matches_server_validation() {
         let mut request = request(Operation::Enroll);
         request.ssh_user = "_worker".into();
         validate_request(&request).unwrap();
@@ -326,7 +326,7 @@ mod tests {
 
         for owner in ["schema", "claims", "retired", "owner", "uninstalled"] {
             let mut invalid = request(Operation::Enroll);
-            invalid.machine_uid = owner.into();
+            invalid.server_uid = owner.into();
             assert!(validate_request(&invalid).is_err());
         }
     }

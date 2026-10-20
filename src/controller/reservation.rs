@@ -2,7 +2,7 @@
 use anyhow::{Context as _, Result, ensure};
 
 use crate::{
-    api::Machine,
+    api::Server,
     jobs::{self, State},
     provision::{AllocationOutcome, Operation, ReservationRequest},
     store::{HostPin, PublicationRecord},
@@ -10,15 +10,15 @@ use crate::{
 
 use super::{
     Context,
-    machine::request_for,
     publication::{cleanup_publication, publication_hash},
+    server::request_for,
 };
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum ReservationConflict {
     #[error("Public port {0} is already reserved or listening on the shared host.")]
     Port(u16),
-    #[error("No free tunnel control port remains in this Machine's controlPortRange.")]
+    #[error("No free tunnel control port remains in this Server's controlPortRange.")]
     ControlRange,
 }
 
@@ -33,32 +33,32 @@ impl ReservationConflict {
 
 pub(super) async fn reserve_publication(
     record: &mut PublicationRecord,
-    machine: &Machine,
+    server: &Server,
     pin: &HostPin,
     generation: &str,
     context: &Context,
 ) -> Result<()> {
     let publication = &record.publication;
     let mut request = request_for(
-        machine,
+        server,
         Operation::Reserve,
-        publication.machine_address,
+        publication.server_address,
         Some(pin),
     );
     request.publication = Some(publication.clone());
     request.generation = Some(generation.into());
     request.reservation = Some(ReservationRequest {
-        control_port_range: machine.spec.control_port_range,
+        control_port_range: server.spec.control_port_range,
         excluded_ports: context
             .store
-            .control_exclusions(machine, publication)
+            .control_exclusions(server, publication)
             .await?,
     });
     let revision = context.revision("reserve");
     let outcome = match jobs::run(
         &context.client,
         &context.resources,
-        machine,
+        server,
         &request,
         &revision,
     )
@@ -77,7 +77,7 @@ pub(super) async fn reserve_publication(
             // remote claim stranded if its chosen control has since been taken.
             let exclusions = context
                 .store
-                .control_exclusions(machine, &record.publication)
+                .control_exclusions(server, &record.publication)
                 .await?;
 
             if exclusions.contains(&control_port) {
@@ -86,7 +86,7 @@ pub(super) async fn reserve_publication(
                 return Ok(());
             }
 
-            commit_reservation(record, machine, control_port, context).await?;
+            commit_reservation(record, server, control_port, context).await?;
         }
         AllocationOutcome::ReservationChanged => {
             replace_reservation(record, context).await?;
@@ -114,7 +114,7 @@ async fn replace_reservation(record: &PublicationRecord, context: &Context) -> R
 
 pub(super) async fn commit_reservation(
     record: &mut PublicationRecord,
-    machine: &Machine,
+    server: &Server,
     control_port: u16,
     context: &Context,
 ) -> Result<()> {
@@ -125,7 +125,7 @@ pub(super) async fn commit_reservation(
     );
     context
         .store
-        .confirm_control(machine, &record.publication, control_port)
+        .confirm_control(server, &record.publication, control_port)
         .await?;
     record.publication.control_port = control_port;
     record.config_hash = publication_hash(&record.publication, &context.resources)?;

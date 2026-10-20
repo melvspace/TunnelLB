@@ -173,7 +173,7 @@ rm() {{
     pub(super) fn active(&self, request: &Request) -> std::path::PathBuf {
         self.path(&format!(
             "active/tunnellb-{}@{}.service",
-            request.machine_uid,
+            request.server_uid,
             request.publication.as_ref().unwrap().id
         ))
     }

@@ -17,10 +17,10 @@ use kube::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::api::{MACHINE_LABEL, MANAGED_LABEL, PUBLICATION_LABEL, Publication, SERVICE_UID_LABEL};
+use crate::api::{MANAGED_LABEL, PUBLICATION_LABEL, Publication, SERVER_LABEL, SERVICE_UID_LABEL};
 
 const KIND_LABEL: &str = "tunnellb.io/kind";
-const MACHINE_UID_LABEL: &str = "tunnellb.io/machine-uid";
+const SERVER_UID_LABEL: &str = "tunnellb.io/server-uid";
 const MAX_ATTEMPTS: usize = 8;
 
 pub struct Store {
@@ -98,10 +98,10 @@ fn owned_labels(kind: &str) -> BTreeMap<String, String> {
     ])
 }
 
-fn machine_labels(kind: &str, uid: &str) -> Result<BTreeMap<String, String>> {
-    ensure!(!uid.is_empty(), "Machine UID is required");
+fn server_labels(kind: &str, uid: &str) -> Result<BTreeMap<String, String>> {
+    ensure!(!uid.is_empty(), "Server UID is required");
     let mut labels = owned_labels(kind);
-    labels.insert(MACHINE_UID_LABEL.into(), uid.into());
+    labels.insert(SERVER_UID_LABEL.into(), uid.into());
 
     Ok(labels)
 }
@@ -109,8 +109,8 @@ fn machine_labels(kind: &str, uid: &str) -> Result<BTreeMap<String, String>> {
 fn publication_labels(kind: &str, publication: &Publication) -> Result<BTreeMap<String, String>> {
     validate_id(&publication.id)?;
     ensure!(
-        !publication.machine_name.is_empty(),
-        "Machine name is required"
+        !publication.server_name.is_empty(),
+        "Server name is required"
     );
     ensure!(
         !publication.service.uid.is_empty()
@@ -118,15 +118,15 @@ fn publication_labels(kind: &str, publication: &Publication) -> Result<BTreeMap<
             && !publication.service.namespace.is_empty(),
         "Service name, namespace and UID are required"
     );
-    let mut labels = machine_labels(kind, &publication.machine_uid)?;
-    labels.insert(MACHINE_LABEL.into(), publication.machine_name.clone());
+    let mut labels = server_labels(kind, &publication.server_uid)?;
+    labels.insert(SERVER_LABEL.into(), publication.server_name.clone());
     labels.insert(SERVICE_UID_LABEL.into(), publication.service.uid.clone());
     labels.insert(PUBLICATION_LABEL.into(), publication.id.clone());
 
     Ok(labels)
 }
 
-fn machine_state_name(prefix: &str, uid: &str) -> String {
+fn server_state_name(prefix: &str, uid: &str) -> String {
     format!(
         "{prefix}-{}",
         &hex::encode(Sha256::digest(uid.as_bytes()))[..20]

@@ -1,17 +1,17 @@
-//! Remote scripts share ownership checks but keep machine and publication lifecycles separate.
+//! Remote scripts share ownership checks but keep server and publication lifecycles separate.
 use base64::{Engine, engine::general_purpose::STANDARD};
 use sha2::{Digest, Sha256};
 
 mod host;
-mod machine;
 mod publication;
 mod reservation;
+mod server;
 #[cfg(test)]
 mod tests;
 
-pub(super) use machine::{enroll_script, probe_script, uninstall_script};
 pub(super) use publication::{apply_script, remove_script};
 pub(super) use reservation::{parse_allocation, reserve_script};
+pub(super) use server::{enroll_script, probe_script, uninstall_script};
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))

@@ -2,12 +2,12 @@ use super::*;
 
 #[tokio::test]
 async fn unpublished_recovery_replaces_an_orphan_reservation_in_one_write() {
-    let machine = machine();
+    let server = server();
     let mut request = record().publication.service;
     let mut orphan = Ledger::default();
-    orphan.allocate(ID, &request, &machine).unwrap();
+    orphan.allocate(ID, &request, &server).unwrap();
     request.ports[0].port = 8443;
-    let url = path("configmaps", &machine_state_name("ports", "machine-uid"));
+    let url = path("configmaps", &server_state_name("ports", "server-uid"));
     let (store, queue) = mock(vec![
         Exchange::missing("GET", &path("configmaps", ID)),
         Exchange::reply("GET", &url, 200, json!(ledger_object(&orphan, "1"))),
@@ -29,7 +29,7 @@ async fn unpublished_recovery_replaces_an_orphan_reservation_in_one_write() {
     ]);
     assert_eq!(
         store
-            .allocate_unpublished(&machine, &request, ID)
+            .allocate_unpublished(&server, &request, ID)
             .await
             .unwrap(),
         20000
@@ -95,7 +95,7 @@ async fn unpublished_allocation_refuses_any_record_and_propagates_record_lookup_
             },
         )]);
         let error = store
-            .allocate_unpublished(&machine(), &record.publication.service, ID)
+            .allocate_unpublished(&server(), &record.publication.service, ID)
             .await
             .unwrap_err();
         assert!(
@@ -109,26 +109,26 @@ async fn unpublished_allocation_refuses_any_record_and_propagates_record_lookup_
 
 #[tokio::test]
 async fn failed_unpublished_replacement_never_persists_a_release() {
-    let machine = machine();
+    let server = server();
     let mut request = record().publication.service;
     let mut ledger = Ledger::default();
-    ledger.allocate(ID, &request, &machine).unwrap();
+    ledger.allocate(ID, &request, &server).unwrap();
     let mut other = request.clone();
     other.uid = "other-service".into();
     other.ports[0].port = 8443;
-    ledger.allocate(OTHER_ID, &other, &machine).unwrap();
+    ledger.allocate(OTHER_ID, &other, &server).unwrap();
     request.ports[0].port = 8443;
     let (store, queue) = mock(vec![
         Exchange::missing("GET", &path("configmaps", ID)),
         Exchange::reply(
             "GET",
-            &path("configmaps", &machine_state_name("ports", "machine-uid")),
+            &path("configmaps", &server_state_name("ports", "server-uid")),
             200,
             json!(ledger_object(&ledger, "1")),
         ),
     ]);
     let error = store
-        .allocate_unpublished(&machine, &request, ID)
+        .allocate_unpublished(&server, &request, ID)
         .await
         .unwrap_err();
     assert!(
@@ -141,17 +141,17 @@ async fn failed_unpublished_replacement_never_persists_a_release() {
 
 #[tokio::test]
 async fn unpublished_cas_retry_rechecks_records_and_preserves_concurrent_reservations() {
-    let machine = machine();
+    let server = server();
     let mut request = record().publication.service;
     let mut orphan = Ledger::default();
-    orphan.allocate(ID, &request, &machine).unwrap();
+    orphan.allocate(ID, &request, &server).unwrap();
     let mut other = request.clone();
     other.uid = "other-service".into();
     other.ports[0].port = 9443;
     let mut winner = orphan.clone();
-    winner.allocate(OTHER_ID, &other, &machine).unwrap();
+    winner.allocate(OTHER_ID, &other, &server).unwrap();
     request.ports[0].port = 8443;
-    let url = path("configmaps", &machine_state_name("ports", "machine-uid"));
+    let url = path("configmaps", &server_state_name("ports", "server-uid"));
 
     for record_appears in [false, true] {
         let mut exchanges = vec![
@@ -203,7 +203,7 @@ async fn unpublished_cas_retry_rechecks_records_and_preserves_concurrent_reserva
         }
 
         let (store, queue) = mock(exchanges);
-        let result = store.allocate_unpublished(&machine, &request, ID).await;
+        let result = store.allocate_unpublished(&server, &request, ID).await;
         assert_eq!(result.is_err(), record_appears);
 
         if let Err(error) = result {

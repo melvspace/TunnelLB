@@ -15,9 +15,9 @@ fn reservation_request() -> provision::Request {
     request.publication = Some(
         serde_json::from_value(json!({
             "id": "publication-123",
-            "machineName": "edge",
-            "machineUid": request.machine_uid,
-            "machineAddress": request.address,
+            "serverName": "edge",
+            "serverUid": request.server_uid,
+            "serverAddress": request.address,
             "controlPort": 0,
             "service": {
                 "namespace": "app", "name": "web", "uid": "service-123",
@@ -26,7 +26,7 @@ fn reservation_request() -> provision::Request {
                     {"name": "https", "port": 443, "protocol": "TCP", "proxyProtocol": "none"},
                     {"name": "dns", "port": 53, "protocol": "UDP", "proxyProtocol": "none"}
                 ],
-                "machines": ["edge"], "pool": null, "replicas": 1
+                "servers": ["edge"], "pool": null, "replicas": 1
             }
         }))
         .unwrap(),

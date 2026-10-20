@@ -2,18 +2,18 @@ use super::*;
 
 #[tokio::test]
 async fn ledger_create_and_replace_races_preserve_concurrent_allocations() {
-    let machine = machine();
+    let server = server();
     let request = record().publication.service;
     let mut competing = request.clone();
     competing.uid = "other-service".into();
     competing.name = "other".into();
     competing.ports[0].port = 8443;
     let mut winner = Ledger::default();
-    let competing_control = winner.allocate(OTHER_ID, &competing, &machine).unwrap();
+    let competing_control = winner.allocate(OTHER_ID, &competing, &server).unwrap();
     let mut expected = winner.clone();
-    let expected_control = expected.allocate(ID, &request, &machine).unwrap();
+    let expected_control = expected.allocate(ID, &request, &server).unwrap();
     let expected_value = serde_json::to_value(&expected).unwrap();
-    let url = path("configmaps", &machine_state_name("ports", "machine-uid"));
+    let url = path("configmaps", &server_state_name("ports", "server-uid"));
 
     for existing in [false, true] {
         let expected_value = expected_value.clone();
@@ -62,7 +62,7 @@ async fn ledger_create_and_replace_races_preserve_concurrent_allocations() {
                 body
             }),
         ]);
-        let allocated = store.allocate(&machine, &request, ID).await.unwrap();
+        let allocated = store.allocate(&server, &request, ID).await.unwrap();
         assert_eq!(allocated, expected_control);
         assert_ne!(allocated, competing_control);
         assert!(queue.lock().unwrap().is_empty());
@@ -71,13 +71,13 @@ async fn ledger_create_and_replace_races_preserve_concurrent_allocations() {
 
 #[tokio::test]
 async fn conflicting_public_port_is_rejected_after_rereading_winner() {
-    let machine = machine();
+    let server = server();
     let request = record().publication.service;
     let mut competing = request.clone();
     competing.uid = "other-service".into();
     let mut winner = Ledger::default();
-    winner.allocate(OTHER_ID, &competing, &machine).unwrap();
-    let url = path("configmaps", &machine_state_name("ports", "machine-uid"));
+    winner.allocate(OTHER_ID, &competing, &server).unwrap();
+    let url = path("configmaps", &server_state_name("ports", "server-uid"));
     let (store, queue) = mock(vec![
         Exchange::missing("GET", &url),
         Exchange::reply(
@@ -88,13 +88,13 @@ async fn conflicting_public_port_is_rejected_after_rereading_winner() {
         ),
         Exchange::reply("GET", &url, 200, json!(ledger_object(&winner, "2"))),
     ]);
-    assert!(store.allocate(&machine, &request, ID).await.is_err());
+    assert!(store.allocate(&server, &request, ID).await.is_err());
     assert!(queue.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn ledger_retries_at_most_eight_times_and_can_succeed_on_eighth_attempt() {
-    let url = path("configmaps", &machine_state_name("ports", "machine-uid"));
+    let url = path("configmaps", &server_state_name("ports", "server-uid"));
 
     for succeed in [false, true] {
         let mut exchanges = vec![];
@@ -115,7 +115,7 @@ async fn ledger_retries_at_most_eight_times_and_can_succeed_on_eighth_attempt() 
 
         let (store, queue) = mock(exchanges);
         let result = store
-            .allocate(&machine(), &record().publication.service, ID)
+            .allocate(&server(), &record().publication.service, ID)
             .await;
         assert_eq!(result.is_ok(), succeed);
 
@@ -133,18 +133,18 @@ async fn ledger_retries_at_most_eight_times_and_can_succeed_on_eighth_attempt() 
 
 #[tokio::test]
 async fn release_and_gc_reapply_removals_to_latest_ledger() {
-    let machine = machine();
+    let server = server();
     let mut request = record().publication.service;
     let mut original = Ledger::default();
-    original.allocate(ID, &request, &machine).unwrap();
+    original.allocate(ID, &request, &server).unwrap();
     request.uid = "other-service".into();
     request.ports[0].port = 8443;
-    original.allocate(OTHER_ID, &request, &machine).unwrap();
+    original.allocate(OTHER_ID, &request, &server).unwrap();
     let mut winner = original.clone();
     request.uid = "third-service".into();
     request.ports[0].port = 9443;
-    winner.allocate(THIRD_ID, &request, &machine).unwrap();
-    let url = path("configmaps", &machine_state_name("ports", "machine-uid"));
+    winner.allocate(THIRD_ID, &request, &server).unwrap();
+    let url = path("configmaps", &server_state_name("ports", "server-uid"));
 
     for gc in [false, true] {
         let (store, queue) = mock(vec![
@@ -169,13 +169,13 @@ async fn release_and_gc_reapply_removals_to_latest_ledger() {
         if gc {
             store
                 .gc_allocations(
-                    "machine-uid",
+                    "server-uid",
                     &BTreeSet::from([OTHER_ID.into(), THIRD_ID.into()]),
                 )
                 .await
                 .unwrap();
         } else {
-            store.release("machine-uid", ID).await.unwrap();
+            store.release("server-uid", ID).await.unwrap();
         }
 
         assert!(queue.lock().unwrap().is_empty());
@@ -184,7 +184,7 @@ async fn release_and_gc_reapply_removals_to_latest_ledger() {
 
 #[tokio::test]
 async fn foreign_corrupt_or_unversioned_ledger_is_not_overwritten() {
-    let url = path("configmaps", &machine_state_name("ports", "machine-uid"));
+    let url = path("configmaps", &server_state_name("ports", "server-uid"));
 
     for problem in ["foreign", "uid", "corrupt", "version"] {
         let mut object = ledger_object(&Ledger::default(), "1");
@@ -196,7 +196,7 @@ async fn foreign_corrupt_or_unversioned_ledger_is_not_overwritten() {
                     .labels
                     .as_mut()
                     .unwrap()
-                    .insert(MACHINE_UID_LABEL.into(), "other-machine".into());
+                    .insert(SERVER_UID_LABEL.into(), "other-server".into());
             }
 
             "corrupt" => object.data = None,
@@ -206,7 +206,7 @@ async fn foreign_corrupt_or_unversioned_ledger_is_not_overwritten() {
         let (store, queue) = mock(vec![Exchange::reply("GET", &url, 200, json!(object))]);
         assert!(
             store
-                .allocate(&machine(), &record().publication.service, ID)
+                .allocate(&server(), &record().publication.service, ID)
                 .await
                 .is_err()
         );
@@ -216,7 +216,7 @@ async fn foreign_corrupt_or_unversioned_ledger_is_not_overwritten() {
 
 #[tokio::test]
 async fn allocation_api_failures_do_not_allow_assignment_movement() {
-    let url = path("configmaps", &machine_state_name("ports", "machine-uid"));
+    let url = path("configmaps", &server_state_name("ports", "server-uid"));
 
     for code in [403, 500] {
         let (store, queue) = mock(vec![
@@ -229,7 +229,7 @@ async fn allocation_api_failures_do_not_allow_assignment_movement() {
             ),
         ]);
         let error = store
-            .allocate(&machine(), &record().publication.service, ID)
+            .allocate(&server(), &record().publication.service, ID)
             .await
             .unwrap_err();
         assert!(

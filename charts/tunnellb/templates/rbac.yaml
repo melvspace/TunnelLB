@@ -12,13 +12,13 @@ rules:
     resources: ["endpointslices"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["tunnellb.io"]
-    resources: ["machines"]
+    resources: ["servers"]
     verbs: ["get", "list", "watch", "patch"]
   - apiGroups: [""]
     resources: ["services", "services/status"]
     verbs: ["patch"]
   - apiGroups: ["tunnellb.io"]
-    resources: ["machines/status", "machines/finalizers"]
+    resources: ["servers/status", "servers/finalizers"]
     verbs: ["patch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

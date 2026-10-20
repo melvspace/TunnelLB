@@ -1,8 +1,8 @@
 # TunnelLB
 
 TunnelLB publishes Kubernetes `LoadBalancer` Services through an existing external
-Linux machine. The operator is written in Rust with kube-rs. It installs pinned
-FRP binaries over SSH and creates an outbound connector for each Service/Machine
+Linux server. The operator is written in Rust with kube-rs. It installs pinned
+FRP binaries over SSH and creates an outbound connector for each Service/Server
 pair.
 
 ```text
@@ -13,7 +13,7 @@ Internet → edge IPv4:Service.port → encrypted FRP tunnel → Service Cluster
 
 The edge is a dedicated proxy, with no Kubernetes credentials, cluster membership,
 Pod-network routes or Tailscale membership. Application TLS terminates inside the
-cluster. The public IP already belongs to the supplied machine; TunnelLB does not
+cluster. The public IP already belongs to the supplied server; TunnelLB does not
 allocate addresses from a cloud provider.
 
 This is an initial implementation. Read the supported configuration and security
@@ -62,7 +62,7 @@ The controller needs Kubernetes API credentials. The forwarding and SSH worker
 pods have `automountServiceAccountToken: false`. SSH private-key Secrets are read
 only from the operator namespace.
 
-## Register a machine
+## Register a server
 
 Authorize a dedicated SSH public key on the edge using your normal VPS setup.
 The matching private key stays in a Kubernetes Secret:
@@ -72,11 +72,11 @@ kubectl -n tunnellb-system create secret generic edge-1-ssh \
   --from-file=ssh-privatekey=/path/to/private-key
 ```
 
-Apply a Machine, replacing the documentation address and SSH user:
+Apply a Server, replacing the documentation address and SSH user:
 
 ```yaml
 apiVersion: tunnellb.io/v1alpha1
-kind: Machine
+kind: Server
 metadata:
   name: edge-1
 spec:
@@ -97,7 +97,7 @@ not independently verified.
 Enrollment installs checksum-verified FRP 0.71.1 and owned systemd units. It
 creates a dedicated locked service account and retains your original authorized
 key. The operator does not configure cloud firewalls, flush host firewall rules
-or join the machine to your VPN.
+or join the server to your VPN.
 
 Allow the management SSH port, intended public Service ports and the allocated
 TCP tunnel control ports through your firewall. `controlPortRange` defaults to
@@ -105,25 +105,25 @@ TCP tunnel control ports through your firewall. `controlPortRange` defaults to
 SSH is always reserved.
 
 ```bash
-kubectl get machines
-kubectl get machine edge-1 -o yaml
+kubectl get servers
+kubectl get server edge-1 -o yaml
 kubectl -n tunnellb-system get jobs,pods
 ```
 
-Changing the Machine address or SSH port requires cleanup and a new enrollment.
+Changing the Server address or SSH port requires cleanup and a new enrollment.
 To retry installation intentionally after fixing an edge, change the
-`tunnellb.io/re-enroll` annotation on the Machine. Unchanged enrolled Machines do
+`tunnellb.io/re-enroll` annotation on the Server. Unchanged enrolled Servers do
 not continually run root installation Jobs.
 
-## Share a machine across clusters
+## Share a server across clusters
 
 Register the same address in each cluster, with an SSH Secret in each operator
 namespace. No cluster identifier or separate port ranges are required. Each
-Machine's Kubernetes UID identifies its registration on the host; the Machine
+Server's Kubernetes UID identifies its registration on the host; the Server
 names may be the same.
 
 The host reserves public ports before starting a tunnel and chooses a free
-control port from that Machine's `controlPortRange`. Reservations are serialized
+control port from that Server's `controlPortRange`. Reservations are serialized
 under a host-wide lock and persist while connectors are disconnected. Different
 clusters must use different public **port numbers**, including across TCP/UDP.
 For example, cluster A can publish TCP 443 while cluster B publishes TCP 25565
@@ -131,13 +131,13 @@ and UDP 24454.
 
 A conflicting Service reports `PortConflict` and retries on the next ten-minute
 provisioning window; it cannot take over another registration's ports. Removing
-one Machine stops only its publications and releases only its reservations.
+one Server stops only its publications and releases only its reservations.
 Other clusters continue using the host.
 An abandoned registration keeps its remote reservations until cleaned up.
 
 All participating cluster administrators must be trusted: root-capable SSH
 access can change any host state. `reservedPorts` is a local cluster policy;
-configure the same exclusions in each cluster when needed. Keep one Machine
+configure the same exclusions in each cluster when needed. Keep one Server
 object per address within each cluster.
 
 ## Publish a Service
@@ -169,7 +169,7 @@ spec:
       protocol: TCP
 ```
 
-The Service receives the Machine's address in `status.loadBalancer.ingress`,
+The Service receives the Server's address in `status.loadBalancer.ingress`,
 with `ipMode: Proxy`. `TunnelLBReady` reports allocation, provisioning and tunnel
 registration state. Registration does not prove application-level health.
 Source addresses are those of the connector unless the receiver supports the
@@ -177,19 +177,19 @@ optional PROXY protocol.
 
 | Annotation | Example | Meaning |
 |---|---|---|
-| `tunnellb.io/machines` | `edge-1,edge-2` | Select these Machines explicitly. |
-| `tunnellb.io/pool` | `public` | Restrict selection to a Machine pool. |
+| `tunnellb.io/servers` | `edge-1,edge-2` | Select these Servers explicitly. |
+| `tunnellb.io/pool` | `public` | Restrict selection to a Server pool. |
 | `tunnellb.io/replicas` | `"2"` | Request two independent edge addresses. |
 | `tunnellb.io/proxy-protocol` | `https=v2,minecraft=v2` | Enable framing on named Service ports. |
 
-Without selection annotations, one eligible Machine is chosen and the assignment
-is persisted. Adding Machines does not move existing publications. An explicit
-Machine list determines the number of endpoints; an accompanying `replicas`
-value must match its length. Pool and explicit Machine selection are mutually
+Without selection annotations, one eligible Server is chosen and the assignment
+is persisted. Adding Servers does not move existing publications. An explicit
+Server list determines the number of endpoints; an accompanying `replicas`
+value must match its length. Pool and explicit Server selection are mutually
 exclusive.
 
-Machines can restrict namespaces with `allowedNamespaces`; an empty list permits
-every administrator-enabled namespace. A Machine holds one public address.
+Servers can restrict namespaces with `allowedNamespaces`; an empty list permits
+every administrator-enabled namespace. A Server holds one public address.
 Different publications must use distinct **numeric ports**, including across
 TCP/UDP, because FRP's authorization allowlist is numeric. One Service can publish
 TCP and UDP on the same number. Each publication also consumes a separate tunnel
@@ -228,15 +228,15 @@ the connector to be reachable. Once the connector process exits, its backend
 connections end. A hostile edge may still listen on its public ports or serve
 its own content.
 
-Delete Services before deleting a Machine. Finalizers stop connectors, remove
-remote publication units and release reservations. Machine deletion also removes
+Delete Services before deleting a Server. Finalizers stop connectors, remove
+remote publication units and release reservations. Server deletion also removes
 owned runtime files. Cleanup waits when the remote host is unreachable.
 
-An administrator can explicitly abandon an unreachable Machine:
+An administrator can explicitly abandon an unreachable Server:
 
 ```bash
-kubectl annotate machine edge-1 tunnellb.io/force-delete=true
-kubectl delete machine edge-1
+kubectl annotate server edge-1 tunnellb.io/force-delete=true
+kubectl delete server edge-1
 ```
 
 Local connector termination is still required. Remote files/listeners may remain.
@@ -245,7 +245,7 @@ its reservation remains until remote cleanup succeeds. It cannot free ports
 still occupied by another tenant's abandoned remote process.
 
 Uninstall retains the registration's revocation marker, locked edge account and
-shared, versioned FRP binary cache. A new Machine UID can immediately reuse ports
+shared, versioned FRP binary cache. A new Server UID can immediately reuse ports
 released by completed cleanup. The retired UID cannot enroll again.
 Do not delete operator state Secrets or allocation ConfigMaps to work around a
 pending cleanup.
@@ -273,7 +273,7 @@ These controls do not make published applications safe from malicious input.
 EndpointSlice validation is reactive, with a nonzero controller response window;
 it is not an admission policy for hostile administrators. A compromised kernel
 or a privileged administrator is outside this boundary. Keep tenants away from
-the operator namespace and Machine/state-management permissions.
+the operator namespace and Server/state-management permissions.
 
 TLS passthrough alone cannot guarantee confidentiality against an edge that can
 obtain a new valid certificate using IP-based domain validation. Use suitable
@@ -285,7 +285,7 @@ DNS validation and CA authorization controls for that threat model.
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
-cargo run --locked -- crd > charts/tunnellb/crds/machines.yaml
+cargo run --locked -- crd > charts/tunnellb/crds/servers.yaml
 helm lint charts/tunnellb --namespace tunnellb-system --strict
 ```
 
@@ -313,7 +313,7 @@ cargo test --locked --test e2e -- --ignored --nocapture
 ```
 
 The test builds/imports images, installs Helm, enrolls the edge and exercises
-forwarding, guards, restarts and cleanup. It refuses existing Machines or
+forwarding, guards, restarts and cleanup. It refuses existing Servers or
 TunnelLB Services. Never supply a production kubeconfig. The implementation
 contract and verification scope are in [`PLAN.md`](PLAN.md).
 

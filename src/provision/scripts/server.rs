@@ -1,4 +1,4 @@
-//! Host eligibility, installation, and terminal machine teardown.
+//! Host eligibility, installation, and terminal server teardown.
 use anyhow::Result;
 
 use super::{
@@ -118,7 +118,7 @@ fi
     upload(
         &mut script,
         "\"$stage/unit\"",
-        systemd_unit(&request.machine_uid).as_bytes(),
+        systemd_unit(&request.server_uid).as_bytes(),
     );
     script.push_str(
         r#"
@@ -202,7 +202,7 @@ if [ -e "$unitfile" ] || [ -L "$unitfile" ]; then
 fi
 sync /etc/systemd/system
 # The shared, immutable versioned binary cache is retained on uninstall:
-# another Machine can still use it, including a stopped publication.
+# another Server can still use it, including a stopped publication.
 # The dedicated, locked system account is deliberately retained: an admin may
 # have granted it other resources. It has no authorized key or login shell.
 rm -rf --one-file-system -- "$owned"

@@ -26,28 +26,28 @@ pub(super) struct Artifacts {
 }
 
 impl Artifacts {
-    /// Validate the Machine scope before embedding credentials. Names bind the
+    /// Validate the Server scope before embedding credentials. Names bind the
     /// exact serialized request and revision; credentials never enter metadata.
     pub(super) fn new(
         options: &resources::ResourceOptions,
-        machine: &api::Machine,
+        server: &api::Server,
         request: &provision::Request,
         revision: &str,
     ) -> Result<Self> {
         ensure!(
-            machine.uid().as_deref() == Some(request.machine_uid.as_str())
-                && machine.spec.address == request.address.to_string()
-                && machine.spec.ssh.user == request.ssh_user
-                && machine.spec.ssh.port == request.ssh_port,
-            "SSH request does not match its Machine"
+            server.uid().as_deref() == Some(request.server_uid.as_str())
+                && server.spec.address == request.address.to_string()
+                && server.spec.ssh.user == request.ssh_user
+                && server.spec.ssh.port == request.ssh_port,
+            "SSH request does not match its Server"
         );
 
         if let Some(publication) = &request.publication {
             ensure!(
-                publication.machine_uid == request.machine_uid
-                    && publication.machine_name == machine.name_any()
-                    && publication.machine_address.to_string() == machine.spec.address,
-                "SSH publication does not match its Machine"
+                publication.server_uid == request.server_uid
+                    && publication.server_name == server.name_any()
+                    && publication.server_address.to_string() == server.spec.address,
+                "SSH publication does not match its Server"
             );
         }
 
@@ -58,18 +58,18 @@ impl Artifacts {
         let identity = Identity {
             namespace: options.namespace.clone(),
             name,
-            machine: machine.name_any(),
-            machine_uid: request.machine_uid.clone(),
+            server: server.name_any(),
+            server_uid: request.server_uid.clone(),
             publication: request.publication.as_ref().map(|p| p.id.clone()),
             hash,
         };
 
-        let address = machine
+        let address = server
             .spec
             .address
             .parse()
-            .map_err(|_| anyhow!("SSH Machine requires an IPv4 address"))?;
-        let key = &machine.spec.ssh.private_key_secret_ref;
+            .map_err(|_| anyhow!("SSH Server requires an IPv4 address"))?;
+        let key = &server.spec.ssh.private_key_secret_ref;
         let mut job = resources::ssh_job(
             &identity.name,
             address,

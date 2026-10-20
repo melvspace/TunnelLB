@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::api::{MACHINE_LABEL, MANAGED_LABEL, PUBLICATION_LABEL};
+use crate::api::{MANAGED_LABEL, PUBLICATION_LABEL, SERVER_LABEL};
 use anyhow::{Result, anyhow, ensure};
 use k8s_openapi::{
     api::batch::v1::Job,
@@ -12,7 +12,7 @@ use kube::ResourceExt;
 use sha2::{Digest, Sha256};
 
 pub(super) const KIND_LABEL: &str = "tunnellb.io/kind";
-pub(super) const MACHINE_UID: &str = "tunnellb.io/machine-uid";
+pub(super) const SERVER_UID: &str = "tunnellb.io/server-uid";
 pub(super) const REQUEST_HASH: &str = "tunnellb.io/request-hash";
 pub(super) const JOB_UID: &str = "tunnellb.io/job-uid";
 
@@ -23,12 +23,12 @@ pub(super) fn request_hash(bytes: &[u8], revision: &str) -> String {
     hex::encode(hash.finalize())
 }
 
-/// Binds an artifact to one request, Machine incarnation, and namespace.
+/// Binds an artifact to one request, Server incarnation, and namespace.
 pub(super) struct Identity {
     pub(super) namespace: String,
     pub(super) name: String,
-    pub(super) machine: String,
-    pub(super) machine_uid: String,
+    pub(super) server: String,
+    pub(super) server_uid: String,
     pub(super) publication: Option<String>,
     pub(super) hash: String,
 }
@@ -38,7 +38,7 @@ impl Identity {
         let mut labels = BTreeMap::from([
             (MANAGED_LABEL.into(), "tunnellb".into()),
             (KIND_LABEL.into(), "ssh-job".into()),
-            (MACHINE_LABEL.into(), self.machine.clone()),
+            (SERVER_LABEL.into(), self.server.clone()),
         ]);
 
         if let Some(publication) = &self.publication {
@@ -48,7 +48,7 @@ impl Identity {
         labels
     }
 
-    /// Jobs and staged dependents must survive deletion of their Machine.
+    /// Jobs and staged dependents must survive deletion of their Server.
     pub(super) fn stamp(&self, metadata: &mut ObjectMeta) {
         metadata.name = Some(self.name.clone());
         metadata.namespace = Some(self.namespace.clone());
@@ -57,13 +57,13 @@ impl Identity {
             .get_or_insert_default()
             .extend(self.labels());
         metadata.annotations.get_or_insert_default().extend([
-            (MACHINE_UID.into(), self.machine_uid.clone()),
+            (SERVER_UID.into(), self.server_uid.clone()),
             (REQUEST_HASH.into(), self.hash.clone()),
         ]);
         metadata.owner_references = None;
     }
 
-    /// Scope is established by namespace, labels, Machine UID and request hash.
+    /// Scope is established by namespace, labels, Server UID and request hash.
     /// Accept no owner, or the exact dependent Job owner and UID annotation.
     pub(super) fn verify(&self, metadata: &ObjectMeta, job: Option<&OwnerReference>) -> Result<()> {
         let labels = metadata.labels.as_ref();
@@ -76,7 +76,7 @@ impl Identity {
                     .iter()
                     .all(|(k, v)| labels.and_then(|l| l.get(k)) == Some(v))
                 && labels.and_then(|l| l.get(PUBLICATION_LABEL)) == self.publication.as_ref()
-                && annotations.and_then(|a| a.get(MACHINE_UID)) == Some(&self.machine_uid)
+                && annotations.and_then(|a| a.get(SERVER_UID)) == Some(&self.server_uid)
                 && annotations.and_then(|a| a.get(REQUEST_HASH)) == Some(&self.hash),
             "SSH artifact ownership mismatch"
         );
@@ -96,14 +96,14 @@ impl Identity {
         let annotations = metadata.annotations.as_ref()?;
         let hash = annotations.get(REQUEST_HASH)?.clone();
         let name = metadata.name.clone()?;
-        let machine = labels.get(MACHINE_LABEL)?.clone();
-        let machine_uid = annotations.get(MACHINE_UID)?.clone();
+        let server = labels.get(SERVER_LABEL)?.clone();
+        let server_uid = annotations.get(SERVER_UID)?.clone();
 
         if hash.len() != 64
             || !hash.bytes().all(|b| b.is_ascii_hexdigit())
             || name != format!("job-{}", &hash[..32])
-            || machine.is_empty()
-            || machine_uid.is_empty()
+            || server.is_empty()
+            || server_uid.is_empty()
         {
             return None;
         }
@@ -111,8 +111,8 @@ impl Identity {
         Some(Self {
             namespace: namespace.into(),
             name,
-            machine,
-            machine_uid,
+            server,
+            server_uid,
             publication: labels.get(PUBLICATION_LABEL).cloned(),
             hash,
         })

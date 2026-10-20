@@ -81,7 +81,7 @@ trap 'rm -rf --one-file-system -- "$stage"' EXIT
         config.as_bytes(),
         certificate.as_bytes(),
         key.as_bytes(),
-        systemd_unit(&request.machine_uid).as_bytes(),
+        systemd_unit(&request.server_uid).as_bytes(),
     ] {
         hasher.update((bytes.len() as u64).to_be_bytes());
         hasher.update(bytes);
@@ -167,7 +167,7 @@ initialize_host
 if [ -e "$retired" ] || [ -L "$retired" ]; then
     persist_marker "$retired" "$owner"
     if [ -e "$owned" ] || [ -L "$owned" ]; then check_cleanup_owner; fi
-    # Terminal Machine revocation already fences every generation, but a
+    # Terminal Server revocation already fences every generation, but a
     # previous Uninstall may have failed before stopping this publication.
     cleanup_publication
     release_claim

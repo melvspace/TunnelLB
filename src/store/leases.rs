@@ -5,22 +5,22 @@ use k8s_openapi::api::core::v1::ConfigMap;
 use kube::api::PostParams;
 
 use super::{
-    MAX_ATTEMPTS, Store, config_map_value, delete_params, delete_result, machine_labels,
-    machine_state_name, resource_version, retryable_write, validate_id,
+    MAX_ATTEMPTS, Store, config_map_value, delete_params, delete_result, resource_version,
+    retryable_write, server_labels, server_state_name, validate_id,
 };
 use crate::{
     allocation::Ledger,
-    api::{Machine, Publication, ServiceRequest},
+    api::{Publication, Server, ServiceRequest},
 };
 
 impl Store {
     pub async fn allocate(
         &self,
-        machine: &Machine,
+        server: &Server,
         request: &ServiceRequest,
         id: &str,
     ) -> Result<u16> {
-        self.allocate_lease(machine, request, id, false).await
+        self.allocate_lease(server, request, id, false).await
     }
 
     /// Recover a reservation committed before its publication record was saved.
@@ -28,23 +28,23 @@ impl Store {
     /// A present record, even unpublished or removing, always blocks replacement.
     pub async fn allocate_unpublished(
         &self,
-        machine: &Machine,
+        server: &Server,
         request: &ServiceRequest,
         id: &str,
     ) -> Result<u16> {
-        self.allocate_lease(machine, request, id, true).await
+        self.allocate_lease(server, request, id, true).await
     }
 
     /// Read local exclusions without reserving a second control port. The host
     /// arbitrates these numbers against reservations from other controllers.
     pub async fn control_exclusions(
         &self,
-        machine: &Machine,
+        server: &Server,
         publication: &Publication,
     ) -> Result<Vec<u16>> {
         validate_id(&publication.id)?;
-        let labels = machine_labels("allocation", &publication.machine_uid)?;
-        let name = machine_state_name("ports", &publication.machine_uid);
+        let labels = server_labels("allocation", &publication.server_uid)?;
+        let name = server_state_name("ports", &publication.server_uid);
         let object = self
             .config_maps()
             .get_opt(&name)
@@ -52,20 +52,20 @@ impl Store {
             .context("publication allocation ledger is missing")?;
         self.check_owned(&object.metadata, &name, &labels)?;
         resource_version(&object.metadata)?;
-        read_ledger(&object)?.control_exclusions(machine, publication)
+        read_ledger(&object)?.control_exclusions(server, publication)
     }
 
     /// Persist a host-selected control using the publication's previous control
     /// as a precondition. A successful earlier confirmation is an idempotent retry.
     pub async fn confirm_control(
         &self,
-        machine: &Machine,
+        server: &Server,
         publication: &Publication,
         control_port: u16,
     ) -> Result<()> {
         validate_id(&publication.id)?;
-        self.edit_ledger(&publication.machine_uid, false, None, |ledger| {
-            ledger.confirm_control(machine, publication, control_port)
+        self.edit_ledger(&publication.server_uid, false, None, |ledger| {
+            ledger.confirm_control(server, publication, control_port)
         })
         .await?
         .context("publication allocation ledger is missing")
@@ -73,33 +73,33 @@ impl Store {
 
     async fn allocate_lease(
         &self,
-        machine: &Machine,
+        server: &Server,
         request: &ServiceRequest,
         id: &str,
         unpublished: bool,
     ) -> Result<u16> {
         validate_id(id)?;
         ensure!(!request.uid.is_empty(), "Service UID is required");
-        let machine_uid = machine
+        let server_uid = server
             .metadata
             .uid
             .as_deref()
             .filter(|uid| !uid.is_empty())
-            .context("Machine UID is required")?;
-        self.edit_ledger(machine_uid, true, unpublished.then_some(id), |ledger| {
+            .context("Server UID is required")?;
+        self.edit_ledger(server_uid, true, unpublished.then_some(id), |ledger| {
             if unpublished {
-                ledger.allocate_unpublished(id, request, machine)
+                ledger.allocate_unpublished(id, request, server)
             } else {
-                ledger.allocate(id, request, machine)
+                ledger.allocate(id, request, server)
             }
         })
         .await?
         .context("allocation ledger was not created")
     }
 
-    pub async fn release(&self, machine_uid: &str, id: &str) -> Result<()> {
+    pub async fn release(&self, server_uid: &str, id: &str) -> Result<()> {
         validate_id(id)?;
-        self.edit_ledger(machine_uid, false, None, |ledger| {
+        self.edit_ledger(server_uid, false, None, |ledger| {
             ledger.release(id);
 
             Ok(())
@@ -113,10 +113,10 @@ impl Store {
     /// allocations whose publication record was not saved before a crash.
     pub async fn gc_allocations(
         &self,
-        machine_uid: &str,
+        server_uid: &str,
         live_ids: &BTreeSet<String>,
     ) -> Result<()> {
-        self.edit_ledger(machine_uid, false, None, |ledger| {
+        self.edit_ledger(server_uid, false, None, |ledger| {
             for id in ledger.publication_ids() {
                 if !live_ids.contains(&id) {
                     ledger.release(&id);
@@ -130,9 +130,9 @@ impl Store {
         Ok(())
     }
 
-    pub async fn delete_ledger(&self, machine_uid: &str) -> Result<()> {
-        let labels = machine_labels("allocation", machine_uid)?;
-        let name = machine_state_name("ports", machine_uid);
+    pub async fn delete_ledger(&self, server_uid: &str) -> Result<()> {
+        let labels = server_labels("allocation", server_uid)?;
+        let name = server_state_name("ports", server_uid);
         let api = self.config_maps();
 
         if let Some(object) = api.get_opt(&name).await? {
@@ -150,13 +150,13 @@ impl Store {
 
     async fn edit_ledger<T>(
         &self,
-        machine_uid: &str,
+        server_uid: &str,
         create: bool,
         unpublished_id: Option<&str>,
         edit: impl Fn(&mut Ledger) -> Result<T>,
     ) -> Result<Option<T>> {
-        let labels = machine_labels("allocation", machine_uid)?;
-        let name = machine_state_name("ports", machine_uid);
+        let labels = server_labels("allocation", server_uid)?;
+        let name = server_state_name("ports", server_uid);
         let api = self.config_maps();
 
         for _ in 0..MAX_ATTEMPTS {

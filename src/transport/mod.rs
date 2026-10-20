@@ -1,4 +1,4 @@
-//! Credentials and immutable FRP configuration for one Service/Machine publication.
+//! Credentials and immutable FRP configuration for one Service/Server publication.
 //!
 //! Field names and behavior are pinned to fatedier/frp v0.71.1:
 //! `conf/{frpc,frps}_full_example.toml`, `pkg/transport/tls.go`, and
@@ -37,7 +37,7 @@ pub struct Credentials {
 
 /// Generate an independent 256-bit token and self-signed server certificate.
 ///
-/// The certificate's IP SAN matches the Machine address. Clients trust only this
+/// The certificate's IP SAN matches the Server address. Clients trust only this
 /// certificate, not the system CA store. rcgen's long-lived validity defaults
 /// allow persisted publications to keep running during controller outages;
 /// rotation/revocation is the caller's responsibility.
@@ -49,7 +49,7 @@ pub fn credentials(publication: &Publication) -> Result<Credentials> {
         .try_fill_bytes(&mut token)
         .context("generating publication authentication token")?;
     let certificate =
-        rcgen::generate_simple_self_signed(vec![publication.machine_address.to_string()])
+        rcgen::generate_simple_self_signed(vec![publication.server_address.to_string()])
             .context("generating publication TLS certificate")?;
 
     Ok(Credentials {
@@ -71,7 +71,7 @@ pub fn server_config(publication: &Publication, credentials: &Credentials) -> Re
 
     let directory = format!(
         "/var/lib/tunnellb/{}/publications/{}",
-        publication.machine_uid, publication.id
+        publication.server_uid, publication.id
     );
     let ports: BTreeSet<_> = publication
         .service
@@ -140,7 +140,7 @@ pub fn client_config(publication: &Publication, credentials: &Credentials) -> Re
         .collect();
 
     toml::to_string_pretty(&json!({
-        "serverAddr": publication.machine_address.to_string(),
+        "serverAddr": publication.server_address.to_string(),
         "serverPort": publication.control_port,
         "loginFailExit": false,
         "auth": auth(credentials),
@@ -149,7 +149,7 @@ pub fn client_config(publication: &Publication, credentials: &Credentials) -> Re
             "tls": {
                 "enable": true,
                 "trustedCaFile": "/etc/tunnellb/ca.crt",
-                "serverName": publication.machine_address.to_string(),
+                "serverName": publication.server_address.to_string(),
             },
         },
         "log": logging(),
@@ -188,7 +188,7 @@ fn validate_token(credentials: &Credentials) -> Result<()> {
 
 fn validate_publication(publication: &Publication) -> Result<()> {
     validate_path_component(&publication.id, "publication ID")?;
-    validate_path_component(&publication.machine_uid, "Machine UID")?;
+    validate_path_component(&publication.server_uid, "Server UID")?;
     ensure!(
         publication.control_port != 0,
         "publication control port must be nonzero"

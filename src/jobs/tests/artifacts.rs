@@ -7,7 +7,7 @@ fn pod_spec(job: &mut Job) -> &mut k8s_openapi::api::core::v1::PodSpec {
 #[test]
 fn content_address_binds_request_and_revision_without_exposing_secrets() {
     let build = |request: &provision::Request, revision| {
-        Artifacts::new(&options(), &machine(), request, revision).unwrap()
+        Artifacts::new(&options(), &server(), request, revision).unwrap()
     };
 
     let original = artifacts();
@@ -44,10 +44,10 @@ fn ownership_requires_uid_scope_hash_and_exact_owner() {
             meta["annotations"]
                 .as_object_mut()
                 .unwrap()
-                .remove(MACHINE_UID);
+                .remove(SERVER_UID);
         },
         |meta| meta["annotations"][REQUEST_HASH] = json!("foreign"),
-        |meta| meta["ownerReferences"] = json!([machine().controller_owner_ref(&()).unwrap()]),
+        |meta| meta["ownerReferences"] = json!([server().controller_owner_ref(&()).unwrap()]),
         |meta| meta["annotations"][JOB_UID] = json!("job-123"),
         |meta| meta["labels"][PUBLICATION_LABEL] = json!("foreign"),
         |meta| {

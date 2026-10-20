@@ -3,21 +3,21 @@ use super::*;
 fn allocated_ledger() -> Ledger {
     let mut ledger = Ledger::default();
     ledger
-        .allocate(ID, &record().publication.service, &machine())
+        .allocate(ID, &record().publication.service, &server())
         .unwrap();
     ledger
 }
 
 #[tokio::test]
 async fn control_confirmation_retries_cas_preserving_concurrent_leases_and_metadata() {
-    let machine = machine();
+    let server = server();
     let publication = record().publication;
     let original = allocated_ledger();
     let mut winner = original.clone();
     let mut competing = publication.service.clone();
     competing.uid = "other-service".into();
     competing.ports[0].port = 8443;
-    winner.allocate(OTHER_ID, &competing, &machine).unwrap();
+    winner.allocate(OTHER_ID, &competing, &server).unwrap();
     let mut expected = winner.clone();
     expected.allocations.get_mut(ID).unwrap().control_port = 20003;
     let mut winner_object = ledger_object(&winner, "2");
@@ -26,7 +26,7 @@ async fn control_confirmation_retries_cas_preserving_concurrent_leases_and_metad
         .as_mut()
         .unwrap()
         .insert("unrelated".into(), "preserved".into());
-    let url = path("configmaps", &machine_state_name("ports", "machine-uid"));
+    let url = path("configmaps", &server_state_name("ports", "server-uid"));
     let (store, queue) = mock(vec![
         Exchange::reply("GET", &url, 200, json!(ledger_object(&original, "1"))),
         Exchange::inspect("PUT", &url, 409, |body| {
@@ -44,7 +44,7 @@ async fn control_confirmation_retries_cas_preserving_concurrent_leases_and_metad
         }),
     ]);
     store
-        .confirm_control(&machine, &publication, 20003)
+        .confirm_control(&server, &publication, 20003)
         .await
         .unwrap();
     assert!(queue.lock().unwrap().is_empty());
@@ -52,10 +52,10 @@ async fn control_confirmation_retries_cas_preserving_concurrent_leases_and_metad
 
 #[tokio::test]
 async fn control_confirmation_revalidates_conflicts_or_observes_its_success_after_cas_retry() {
-    let machine = machine();
+    let server = server();
     let publication = record().publication;
     let original = allocated_ledger();
-    let url = path("configmaps", &machine_state_name("ports", "machine-uid"));
+    let url = path("configmaps", &server_state_name("ports", "server-uid"));
 
     for change in ["selected", "third-control", "owner", "public", "collision"] {
         let mut winner = original.clone();
@@ -74,7 +74,7 @@ async fn control_confirmation_revalidates_conflicts_or_observes_its_success_afte
                 let mut competing = publication.service.clone();
                 competing.uid = "other-service".into();
                 competing.ports[0].port = 20003;
-                winner.allocate(OTHER_ID, &competing, &machine).unwrap();
+                winner.allocate(OTHER_ID, &competing, &server).unwrap();
             }
         }
 
@@ -83,7 +83,7 @@ async fn control_confirmation_revalidates_conflicts_or_observes_its_success_afte
             Exchange::reply("PUT", &url, 409, status(409, "Conflict")),
             Exchange::reply("GET", &url, 200, json!(ledger_object(&winner, "2"))),
         ]);
-        let result = store.confirm_control(&machine, &publication, 20003).await;
+        let result = store.confirm_control(&server, &publication, 20003).await;
         assert_eq!(result.is_ok(), change == "selected", "{change}");
         assert!(queue.lock().unwrap().is_empty());
     }
@@ -91,23 +91,23 @@ async fn control_confirmation_revalidates_conflicts_or_observes_its_success_afte
 
 #[tokio::test]
 async fn control_exclusions_read_the_owned_ledger_without_requiring_old_control_equality() {
-    let machine = machine();
+    let server = server();
     let publication = record().publication;
     let mut ledger = allocated_ledger();
     ledger.allocations.get_mut(ID).unwrap().control_port = 20003;
     let mut other = publication.service.clone();
     other.uid = "other-service".into();
     other.ports[0].port = 8443;
-    ledger.allocate(OTHER_ID, &other, &machine).unwrap();
+    ledger.allocate(OTHER_ID, &other, &server).unwrap();
     let (store, queue) = mock(vec![Exchange::reply(
         "GET",
-        &path("configmaps", &machine_state_name("ports", "machine-uid")),
+        &path("configmaps", &server_state_name("ports", "server-uid")),
         200,
         json!(ledger_object(&ledger, "1")),
     )]);
     assert_eq!(
         store
-            .control_exclusions(&machine, &publication)
+            .control_exclusions(&server, &publication)
             .await
             .unwrap(),
         vec![22, 443, 8443, 20000]
@@ -117,15 +117,15 @@ async fn control_exclusions_read_the_owned_ledger_without_requiring_old_control_
 
 #[tokio::test]
 async fn control_operations_reject_missing_foreign_or_invalid_ledger_without_writes() {
-    let machine = machine();
+    let server = server();
     let publication = record().publication;
-    let url = path("configmaps", &machine_state_name("ports", "machine-uid"));
+    let url = path("configmaps", &server_state_name("ports", "server-uid"));
 
     for problem in [
         "missing-ledger",
         "missing-lease",
         "foreign",
-        "machine-uid",
+        "server-uid",
         "version",
         "corrupt",
         "invalid",
@@ -141,13 +141,13 @@ async fn control_operations_reject_missing_foreign_or_invalid_ledger_without_wri
         let mut object = ledger_object(&ledger, "1");
         match problem {
             "foreign" => object.metadata.labels = None,
-            "machine-uid" => {
+            "server-uid" => {
                 object
                     .metadata
                     .labels
                     .as_mut()
                     .unwrap()
-                    .insert(MACHINE_UID_LABEL.into(), "recreated-machine".into());
+                    .insert(SERVER_UID_LABEL.into(), "recreated-server".into());
             }
             "version" => object.metadata.resource_version = None,
             "corrupt" => object.data = None,
@@ -164,7 +164,7 @@ async fn control_operations_reject_missing_foreign_or_invalid_ledger_without_wri
             if confirm {
                 assert!(
                     store
-                        .confirm_control(&machine, &publication, 20003)
+                        .confirm_control(&server, &publication, 20003)
                         .await
                         .is_err(),
                     "{problem}"
@@ -172,7 +172,7 @@ async fn control_operations_reject_missing_foreign_or_invalid_ledger_without_wri
             } else {
                 assert!(
                     store
-                        .control_exclusions(&machine, &publication)
+                        .control_exclusions(&server, &publication)
                         .await
                         .is_err(),
                     "{problem}"

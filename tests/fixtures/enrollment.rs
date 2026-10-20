@@ -10,13 +10,13 @@ use tunnellb::provision::Outcome;
 impl Run {
     pub(super) fn enrollment(&self) -> Result<()> {
         eprintln!("e2e: real SSH enrollment and persisted host pin");
-        wait_for("Machine enrollment", 180, || {
-            Ok(self.get(&self.operator, "machine", &self.machine)?["status"]["phase"] == "Ready")
+        wait_for("Server enrollment", 180, || {
+            Ok(self.get(&self.operator, "server", &self.server)?["status"]["phase"] == "Ready")
         })?;
         let jobs = self.list(
             &self.operator,
             "jobs",
-            &format!("tunnellb.io/machine={}", self.machine),
+            &format!("tunnellb.io/server={}", self.server),
         )?;
         let successful_jobs: Vec<_> = jobs
             .iter()

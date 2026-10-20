@@ -1,4 +1,4 @@
-use crate::{api::Machine, resources::ResourceOptions, store::Store};
+use crate::{api::Server, resources::ResourceOptions, store::Store};
 use anyhow::{Result, ensure};
 use clap::Args;
 use futures::StreamExt;
@@ -24,14 +24,14 @@ use tokio::sync::Mutex;
 
 mod health;
 mod kubernetes;
-mod machine;
 mod publication;
 mod reservation;
+mod server;
 mod service;
 use health::serve_health;
-use machine::reconcile_machine;
 use publication::cleanup_publication;
 pub use publication::publication_id;
+use server::reconcile_server;
 use service::{is_managed, reconcile_service};
 
 #[derive(Args, Clone, Debug)]
@@ -52,8 +52,8 @@ pub struct Config {
         default_value = "tunnellb-worker"
     )]
     pub worker_service_account: String,
-    #[arg(long, env = "TUNNELLB_ALLOW_PRIVATE_MACHINES", default_value_t = false)]
-    pub allow_private_machines: bool,
+    #[arg(long, env = "TUNNELLB_ALLOW_PRIVATE_SERVERS", default_value_t = false)]
+    pub allow_private_servers: bool,
     #[arg(long, env = "TUNNELLB_REQUEUE_SECONDS", default_value_t = 10)]
     pub requeue_seconds: u64,
     #[arg(long, env = "TUNNELLB_HEALTH_ADDRESS", default_value = "0.0.0.0:8080")]
@@ -93,7 +93,7 @@ pub async fn run(config: Config) -> Result<()> {
         serial: Mutex::new(()),
     });
     // Fail startup on missing CRDs/RBAC, instead of reporting a healthy idle loop.
-    Api::<Machine>::all(client.clone())
+    Api::<Server>::all(client.clone())
         .list(&ListParams::default().limit(1))
         .await?;
     Api::<Service>::all(client.clone())
@@ -114,7 +114,7 @@ pub async fn run(config: Config) -> Result<()> {
     let service_cache = controller.store();
     let pod_cache = service_cache.clone();
     let namespace_cache = service_cache.clone();
-    let machine_cache = service_cache.clone();
+    let server_cache = service_cache.clone();
     let services = controller
         .watches(
             Api::<EndpointSlice>::all(client.clone()),
@@ -155,10 +155,10 @@ pub async fn run(config: Config) -> Result<()> {
             },
         )
         .watches(
-            Api::<Machine>::all(client.clone()),
+            Api::<Server>::all(client.clone()),
             watcher::Config::default(),
             move |_| {
-                machine_cache
+                server_cache
                     .state()
                     .into_iter()
                     .filter(|service| is_managed(service))
@@ -174,17 +174,17 @@ pub async fn run(config: Config) -> Result<()> {
             }
         });
     let sweep = sweep_orphans(context.clone());
-    let machines = Controller::new(Api::<Machine>::all(client), watcher::Config::default())
+    let servers = Controller::new(Api::<Server>::all(client), watcher::Config::default())
         .shutdown_on_signal()
-        .run(reconcile_machine, error_policy, context)
+        .run(reconcile_server, error_policy, context)
         .for_each(|result| async move {
             if result.is_err() {
-                tracing::warn!("Machine reconciliation will retry");
+                tracing::warn!("Server reconciliation will retry");
             }
         });
     tokio::select! {
         _ = services => {},
-        _ = machines => {},
+        _ = servers => {},
         _ = sweep => {},
         result = health => { result??; }
     }
@@ -209,7 +209,7 @@ async fn sweep_once(context: &Context) -> Result<()> {
     let services = Api::<Service>::all(context.client.clone())
         .list(&ListParams::default())
         .await?;
-    let machines = Api::<Machine>::all(context.client.clone())
+    let servers = Api::<Server>::all(context.client.clone())
         .list(&ListParams::default())
         .await?;
     let records = context.store.records("").await?;
@@ -217,20 +217,20 @@ async fn sweep_once(context: &Context) -> Result<()> {
         let service_live = services.items.iter().any(|s| {
             is_managed(s) && s.uid().as_deref() == Some(record.publication.service.uid.as_str())
         });
-        let machine_live = machines
+        let server_live = servers
             .items
             .iter()
-            .any(|m| m.uid().as_deref() == Some(record.publication.machine_uid.as_str()));
+            .any(|m| m.uid().as_deref() == Some(record.publication.server_uid.as_str()));
 
-        if (record.removing || !service_live || !machine_live)
+        if (record.removing || !service_live || !server_live)
             && cleanup_publication(record, context, false).await.is_err()
         {
             tracing::warn!(publication = %record.publication.id, "Orphan cleanup will retry");
         }
     }
 
-    for machine in &machines.items {
-        let Some(uid) = machine.uid() else {
+    for server in &servers.items {
+        let Some(uid) = server.uid() else {
             continue;
         };
         // Preserve reservation-only writes for live Services and every record
@@ -244,12 +244,12 @@ async fn sweep_once(context: &Context) -> Result<()> {
         live.extend(
             records
                 .iter()
-                .filter(|r| r.publication.machine_uid == uid)
+                .filter(|r| r.publication.server_uid == uid)
                 .map(|r| r.publication.id.clone()),
         );
 
         if context.store.gc_allocations(&uid, &live).await.is_err() {
-            tracing::warn!(machine = %machine.name_any(), "Allocation cleanup will retry");
+            tracing::warn!(server = %server.name_any(), "Allocation cleanup will retry");
         }
     }
 

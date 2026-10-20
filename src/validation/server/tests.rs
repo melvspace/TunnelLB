@@ -2,10 +2,10 @@ use serde_json::json;
 
 use super::*;
 
-fn machine() -> Machine {
+fn server() -> Server {
     serde_json::from_value(json!({
-        "apiVersion": "tunnellb.io/v1alpha1", "kind": "Machine",
-        "metadata": {"name": "edge", "uid": "machine-uid"},
+        "apiVersion": "tunnellb.io/v1alpha1", "kind": "Server",
+        "metadata": {"name": "edge", "uid": "server-uid"},
         "spec": {
             "address": "8.8.8.8",
             "ssh": {"user": "deploy", "privateKeySecretRef": {"name": "edge-key"}},
@@ -16,31 +16,31 @@ fn machine() -> Machine {
 }
 
 #[test]
-fn machine_requires_public_ipv4_unless_private_test_mode_is_explicit() {
-    let mut m = machine();
+fn server_requires_public_ipv4_unless_private_test_mode_is_explicit() {
+    let mut m = server();
 
     assert_eq!(
-        validate_machine(&m, &[], false).unwrap(),
+        validate_server(&m, &[], false).unwrap(),
         Ipv4Addr::new(8, 8, 8, 8)
     );
 
     for ip in ["10.1.2.3", "172.16.0.2", "172.31.255.1", "192.168.8.2"] {
         m.spec.address = ip.into();
 
-        assert!(validate_machine(&m, &[], false).is_err(), "{ip}");
-        assert!(validate_machine(&m, &[], true).is_ok(), "{ip}");
+        assert!(validate_server(&m, &[], false).is_err(), "{ip}");
+        assert!(validate_server(&m, &[], true).is_ok(), "{ip}");
     }
 
     for ip in ["172.15.0.2", "172.32.0.2", "192.169.8.2"] {
         m.spec.address = ip.into();
 
-        assert!(validate_machine(&m, &[], false).is_ok(), "{ip}");
+        assert!(validate_server(&m, &[], false).is_ok(), "{ip}");
     }
 }
 
 #[test]
 fn private_mode_never_admits_nonunicast_or_reserved_addresses() {
-    let mut m = machine();
+    let mut m = server();
 
     for ip in [
         "localhost",
@@ -71,12 +71,12 @@ fn private_mode_never_admits_nonunicast_or_reserved_addresses() {
         m.spec.address = ip.into();
 
         for allow_private in [false, true] {
-            let error = validate_machine(&m, &[], allow_private).unwrap_err();
+            let error = validate_server(&m, &[], allow_private).unwrap_err();
 
             assert!(
                 matches!(
                     error.downcast_ref::<ValidationError>(),
-                    Some(ValidationError::InvalidMachine(_))
+                    Some(ValidationError::InvalidServer(_))
                 ),
                 "{ip}: {error}"
             );
@@ -92,7 +92,7 @@ fn node_address_exclusion_applies_even_in_private_mode_and_to_mapped_ipv4() {
         ("10.1.2.3", "::ffff:10.1.2.3"),
     ] {
         for address_type in ["InternalIP", "ExternalIP"] {
-            let mut m = machine();
+            let mut m = server();
             m.spec.address = address.into();
             let node: Node = serde_json::from_value(json!({
                 "metadata": {"name": "worker"},
@@ -102,7 +102,7 @@ fn node_address_exclusion_applies_even_in_private_mode_and_to_mapped_ipv4() {
 
             for allow_private in [false, true] {
                 let error =
-                    validate_machine(&m, std::slice::from_ref(&node), allow_private).unwrap_err();
+                    validate_server(&m, std::slice::from_ref(&node), allow_private).unwrap_err();
 
                 assert!(
                     error
@@ -129,38 +129,38 @@ fn ssh_username_and_secret_reference_reject_injection() {
         "1root",
         "déploy",
     ] {
-        let mut m = machine();
+        let mut m = server();
         m.spec.ssh.user = user.into();
 
-        assert!(validate_machine(&m, &[], false).is_err(), "{user:?}");
+        assert!(validate_server(&m, &[], false).is_err(), "{user:?}");
     }
 
     for user in ["root", "deploy_1", "_worker", "Deploy-user"] {
-        let mut m = machine();
+        let mut m = server();
         m.spec.ssh.user = user.into();
 
-        assert!(validate_machine(&m, &[], false).is_ok(), "{user:?}");
+        assert!(validate_server(&m, &[], false).is_ok(), "{user:?}");
     }
 
     for name in ["", "bad/name", "-key", "UpperCase", "a..b", "../key"] {
-        let mut m = machine();
+        let mut m = server();
         m.spec.ssh.private_key_secret_ref.name = name.into();
 
-        assert!(validate_machine(&m, &[], false).is_err(), "{name:?}");
+        assert!(validate_server(&m, &[], false).is_err(), "{name:?}");
     }
 
     for key in [
         "", ".", "..", "../key", "..data", "key/path", "key\n", "$(id)",
     ] {
-        let mut m = machine();
+        let mut m = server();
         m.spec.ssh.private_key_secret_ref.key = key.into();
 
-        assert!(validate_machine(&m, &[], false).is_err(), "{key:?}");
+        assert!(validate_server(&m, &[], false).is_err(), "{key:?}");
     }
 }
 
 #[test]
-fn machine_control_range_and_reservations_are_checked() {
+fn server_control_range_and_reservations_are_checked() {
     for (start, end, reserved, ssh) in [
         (0, 3, vec![], 22),
         (30, 20, vec![], 22),
@@ -170,19 +170,19 @@ fn machine_control_range_and_reservations_are_checked() {
         (20, 30, vec![23, 23], 22),
         (20, 30, vec![], 0),
     ] {
-        let mut m = machine();
+        let mut m = server();
         m.spec.control_port_range = crate::api::PortRange { start, end };
         m.spec.reserved_ports = reserved;
         m.spec.ssh.port = ssh;
 
-        assert!(validate_machine(&m, &[], false).is_err());
+        assert!(validate_server(&m, &[], false).is_err());
     }
 
-    let mut m = machine();
+    let mut m = server();
     m.spec.control_port_range = crate::api::PortRange {
         start: 65535,
         end: 65535,
     };
 
-    assert!(validate_machine(&m, &[], false).is_ok());
+    assert!(validate_server(&m, &[], false).is_ok());
 }

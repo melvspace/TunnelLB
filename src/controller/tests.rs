@@ -109,7 +109,7 @@ fn mock(exchanges: Vec<Exchange>) -> (Arc<Context>, Arc<StdMutex<VecDeque<Exchan
         image: "tunnellb:test".into(),
         image_pull_policy: "IfNotPresent".into(),
         worker_service_account: "tunnellb-worker".into(),
-        allow_private_machines: false,
+        allow_private_servers: false,
         requeue_seconds: 10,
         health_address: "127.0.0.1:0".parse().unwrap(),
     };
@@ -167,17 +167,17 @@ fn list(kind: &str, items: Vec<Value>) -> Value {
 fn record() -> PublicationRecord {
     serde_json::from_value(json!({
         "publication": {
-            "id": publication_id("service-uid", "machine-uid"),
-            "machineName": "edge", "machineUid": "machine-uid",
-            "machineAddress": "8.8.8.8", "controlPort": 20000,
+            "id": publication_id("service-uid", "server-uid"),
+            "serverName": "edge", "serverUid": "server-uid",
+            "serverAddress": "8.8.8.8", "controlPort": 20000,
             "service": {
                 "namespace": TENANT, "name": "web", "uid": "service-uid",
                 "clusterIp": "10.96.1.10", "selector": {"app": "web"},
                 "ports": [{"name": "https", "port": 443, "protocol": "TCP", "proxyProtocol": "none"}],
-                "machines": [], "pool": null, "replicas": 1,
+                "servers": [], "pool": null, "replicas": 1,
             },
         },
-        "machine_spec": {
+        "server_spec": {
             "address": "8.8.8.8",
             "ssh": {"user": "root", "port": 22, "privateKeySecretRef": {"name": "administrator-key"}},
         },
@@ -213,8 +213,8 @@ fn record_object(record: &PublicationRecord) -> Value {
             "name": p.id, "namespace": OPERATOR, "uid": "record-uid", "resourceVersion": "7",
             "labels": {
                 MANAGED_LABEL: "tunnellb", PUBLICATION_LABEL: p.id,
-                MACHINE_LABEL: p.machine_name, SERVICE_UID_LABEL: p.service.uid,
-                "tunnellb.io/kind": "publication", "tunnellb.io/machine-uid": p.machine_uid,
+                SERVER_LABEL: p.server_name, SERVICE_UID_LABEL: p.service.uid,
+                "tunnellb.io/kind": "publication", "tunnellb.io/server-uid": p.server_uid,
             },
         },
         "data": {"record.json": serde_json::to_string(record).unwrap()},
@@ -314,17 +314,17 @@ fn connector_termination(record: &PublicationRecord, present: bool, delete: bool
     exchanges
 }
 
-fn assigned_machine(record: &PublicationRecord) -> Machine {
-    let mut machine = Machine::new("edge", record.machine_spec.clone());
-    machine.metadata.uid = Some(record.publication.machine_uid.clone());
-    machine.status = Some(MachineStatus {
+fn assigned_server(record: &PublicationRecord) -> Server {
+    let mut server = Server::new("edge", record.server_spec.clone());
+    server.metadata.uid = Some(record.publication.server_uid.clone());
+    server.status = Some(ServerStatus {
         phase: "Ready".into(),
         ..Default::default()
     });
-    machine
+    server
 }
 
-fn unavailable_backend(record: &PublicationRecord, machines: &[Machine]) -> Vec<Exchange> {
+fn unavailable_backend(record: &PublicationRecord, servers: &[Server]) -> Vec<Exchange> {
     vec![
         records(record),
         Exchange::get(
@@ -340,8 +340,8 @@ fn unavailable_backend(record: &PublicationRecord, machines: &[Machine]) -> Vec<
             list("Pod", vec![]),
         ),
         Exchange::get(
-            "/apis/tunnellb.io/v1alpha1/machines".into(),
-            list("Machine", machines.iter().map(|m| json!(m)).collect()),
+            "/apis/tunnellb.io/v1alpha1/servers".into(),
+            list("Server", servers.iter().map(|m| json!(m)).collect()),
         ),
         Exchange::get("/api/v1/nodes".into(), list("Node", vec![])),
     ]
@@ -350,9 +350,9 @@ fn unavailable_backend(record: &PublicationRecord, machines: &[Machine]) -> Vec<
 fn ready_backend(
     record: &PublicationRecord,
     service: &Service,
-    machines: &[Machine],
+    servers: &[Server],
 ) -> Vec<Exchange> {
-    let mut exchanges = unavailable_backend(record, machines);
+    let mut exchanges = unavailable_backend(record, servers);
     let port = &service.spec.as_ref().unwrap().ports.as_ref().unwrap()[0];
     exchanges[2] = Exchange::get(
         format!("/apis/discovery.k8s.io/v1/namespaces/{TENANT}/endpointslices"),
@@ -418,7 +418,7 @@ fn condition(service: &Service, reason: &'static str, retains_ips: bool) -> Exch
 async fn unavailable_backends_keep_an_unchanged_connector_and_publication() {
     let record = record();
     let service = service();
-    let mut exchanges = unavailable_backend(&record, &[assigned_machine(&record)]);
+    let mut exchanges = unavailable_backend(&record, &[assigned_server(&record)]);
     exchanges.push(Exchange::get(
         path("deployments", &record.publication.id),
         json!({
@@ -441,12 +441,12 @@ async fn backend_unavailability_does_not_hide_destination_or_authorization_chang
         "ip",
         "selector",
         "port",
-        "machine-authorization",
+        "server-authorization",
         "selection",
     ] {
         let record = record();
         let mut service = service();
-        let mut machine = assigned_machine(&record);
+        let mut server = assigned_server(&record);
 
         match change {
             "ip" => service.spec.as_mut().unwrap().cluster_ip = Some("10.96.1.11".into()),
@@ -455,17 +455,17 @@ async fn backend_unavailability_does_not_hide_destination_or_authorization_chang
                     Some(BTreeMap::from([("app".into(), "other".into())]));
             }
             "port" => service.spec.as_mut().unwrap().ports.as_mut().unwrap()[0].port = 444,
-            "machine-authorization" => machine.spec.allowed_namespaces = vec!["other".into()],
+            "server-authorization" => server.spec.allowed_namespaces = vec!["other".into()],
             "selection" => {
                 service.metadata.annotations = Some(BTreeMap::from([(
-                    "tunnellb.io/machines".into(),
+                    "tunnellb.io/servers".into(),
                     "other".into(),
                 )]));
             }
             _ => unreachable!(),
         }
 
-        let mut exchanges = unavailable_backend(&record, &[machine]);
+        let mut exchanges = unavailable_backend(&record, &[server]);
         exchanges.extend(mark_removing(&record, 200));
         exchanges.extend(connector_termination(&record, true, true));
         exchanges.push(condition(&service, "Reconfiguring", false));
@@ -479,11 +479,11 @@ async fn backend_unavailability_does_not_hide_destination_or_authorization_chang
 async fn duplicate_address_suspends_connector_without_removing_its_assignment() {
     let record = record();
     let service = service();
-    let machine = assigned_machine(&record);
-    let mut duplicate = machine.clone();
+    let server = assigned_server(&record);
+    let mut duplicate = server.clone();
     duplicate.metadata.name = Some("duplicate".into());
     duplicate.metadata.uid = Some("duplicate-uid".into());
-    let mut exchanges = unavailable_backend(&record, &[machine, duplicate]);
+    let mut exchanges = unavailable_backend(&record, &[server, duplicate]);
     exchanges.extend(connector_termination(&record, true, true));
     exchanges.push(condition(&service, "AddressConflict", true));
     let (context, queue) = mock(exchanges);
@@ -497,7 +497,7 @@ async fn namespace_revocation_and_unverifiable_routed_endpoints_stop_connectors(
     for namespace_revoked in [false, true] {
         let record = record();
         let service = service();
-        let mut exchanges = ready_backend(&record, &service, &[assigned_machine(&record)]);
+        let mut exchanges = ready_backend(&record, &service, &[assigned_server(&record)]);
 
         if namespace_revoked {
             exchanges.truncate(2);
@@ -570,8 +570,8 @@ async fn connector_only_changes_persist_desired_state_and_resume_stopping_after_
             &context.resources,
             &previous.config_hash,
         );
-        let machine = assigned_machine(&previous);
-        let mut exchanges = ready_backend(&previous, &service, std::slice::from_ref(&machine));
+        let server = assigned_server(&previous);
+        let mut exchanges = ready_backend(&previous, &service, std::slice::from_ref(&server));
         exchanges.extend(save_record(&previous, &desired, 200));
         exchanges.push(Exchange::get(
             path("deployments", &previous.publication.id),
@@ -582,7 +582,7 @@ async fn connector_only_changes_persist_desired_state_and_resume_stopping_after_
 
         // Reconcile again using the saved desired hash but the old live template.
         // A restart between the save and delete must still terminate that template.
-        exchanges.extend(ready_backend(&desired, &service, &[machine]));
+        exchanges.extend(ready_backend(&desired, &service, &[server]));
         exchanges.push(Exchange::get(
             path("configmaps", &desired.publication.id),
             record_object(&desired),
@@ -595,7 +595,7 @@ async fn connector_only_changes_persist_desired_state_and_resume_stopping_after_
         exchanges.push(condition(&service, "Connecting", true));
         // Losing backends after persisting desired state cannot mask the old
         // running template either.
-        exchanges.extend(unavailable_backend(&desired, &[assigned_machine(&desired)]));
+        exchanges.extend(unavailable_backend(&desired, &[assigned_server(&desired)]));
         exchanges.push(Exchange::get(
             path("deployments", &desired.publication.id),
             json!(deployment),
@@ -614,7 +614,7 @@ async fn connector_only_changes_persist_desired_state_and_resume_stopping_after_
 #[tokio::test]
 async fn missing_deployment_does_not_recreate_connector_until_old_children_are_gone() {
     let mut record = record();
-    let machine = assigned_machine(&record);
+    let server = assigned_server(&record);
     let mut exchanges = vec![Exchange::reply(
         "GET",
         path("deployments", &record.publication.id),
@@ -632,7 +632,7 @@ async fn missing_deployment_does_not_recreate_connector_until_old_children_are_g
     exchanges.extend(terminating);
     let (context, queue) = mock(exchanges);
     assert!(
-        !ensure_publication(&mut record, &machine, &context)
+        !ensure_publication(&mut record, &server, &context)
             .await
             .unwrap()
     );
@@ -706,9 +706,9 @@ async fn persisted_removing_record_cannot_resume_apply_when_service_reverts() {
     }
 
     // Also guard callers of ensure_publication itself, before even lease reads.
-    let mut machine = Machine::new("edge", record.machine_spec.clone());
-    machine.metadata.uid = Some(record.publication.machine_uid.clone());
-    let error = ensure_publication(&mut record, &machine, &context)
+    let mut server = Server::new("edge", record.server_spec.clone());
+    server.metadata.uid = Some(record.publication.server_uid.clone());
+    let error = ensure_publication(&mut record, &server, &context)
         .await
         .unwrap_err();
     assert!(error.to_string().contains("committed to removal"));
@@ -804,16 +804,13 @@ async fn tenant_force_delete_detaches_but_keeps_remote_cleanup_and_port_lease() 
         .as_mut()
         .unwrap()
         .push("other.example/cleanup".into());
-    let pin_name = format!(
-        "host-{}",
-        &hex::encode(Sha256::digest(b"machine-uid"))[..20]
-    );
+    let pin_name = format!("host-{}", &hex::encode(Sha256::digest(b"server-uid"))[..20]);
     let pin = json!({
         "metadata": {
             "name": pin_name, "namespace": OPERATOR, "uid": "pin-uid", "resourceVersion": "4",
             "labels": {
                 MANAGED_LABEL: "tunnellb", "tunnellb.io/kind": "host-pin",
-                "tunnellb.io/machine-uid": "machine-uid",
+                "tunnellb.io/server-uid": "server-uid",
             },
         },
         "immutable": true,
@@ -861,12 +858,12 @@ async fn missing_record_allocation_recovery_propagates_api_errors_without_fallba
     for record_lookup_fails in [true, false] {
         let service = service();
         let record = record();
-        let machine = assigned_machine(&record);
-        let mut fallback = machine.clone();
+        let server = assigned_server(&record);
+        let mut fallback = server.clone();
         fallback.metadata.name = Some("z-fallback".into());
         fallback.metadata.uid = Some("fallback-uid".into());
         fallback.spec.address = "1.1.1.1".into();
-        let mut exchanges = ready_backend(&record, &service, &[fallback, machine]);
+        let mut exchanges = ready_backend(&record, &service, &[fallback, server]);
         exchanges[0] = Exchange::get(path("configmaps", ""), list("ConfigMap", vec![]));
         exchanges.push(Exchange::reply(
             "GET",
@@ -878,7 +875,7 @@ async fn missing_record_allocation_recovery_propagates_api_errors_without_fallba
         if !record_lookup_fails {
             let ledger_name = format!(
                 "ports-{}",
-                &hex::encode(Sha256::digest(b"machine-uid"))[..20]
+                &hex::encode(Sha256::digest(b"server-uid"))[..20]
             );
             exchanges.push(Exchange::reply(
                 "GET",
@@ -898,7 +895,7 @@ async fn missing_record_allocation_recovery_propagates_api_errors_without_fallba
             ),
             "{error:#}"
         );
-        // The second eligible Machine must not hide operational failure by
+        // The second eligible Server must not hide operational failure by
         // accepting a new reservation or reporting AllocationPending.
         assert!(queue.lock().unwrap().is_empty());
     }

@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 
-use crate::api::{MACHINE_LABEL, MANAGED_LABEL, PUBLICATION_LABEL, Publication, SERVICE_UID_LABEL};
+use crate::api::{MANAGED_LABEL, PUBLICATION_LABEL, Publication, SERVER_LABEL, SERVICE_UID_LABEL};
 
 const SSH_JOB_LABEL: &str = "tunnellb.io/ssh-job";
 
@@ -31,7 +31,7 @@ fn publication_labels(publication: &Publication) -> BTreeMap<String, String> {
     BTreeMap::from([
         (MANAGED_LABEL.into(), "tunnellb".into()),
         (PUBLICATION_LABEL.into(), publication.id.clone()),
-        (MACHINE_LABEL.into(), publication.machine_name.clone()),
+        (SERVER_LABEL.into(), publication.server_name.clone()),
         (SERVICE_UID_LABEL.into(), publication.service.uid.clone()),
         (
             "tunnellb.io/service-namespace".into(),

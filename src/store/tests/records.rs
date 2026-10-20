@@ -5,8 +5,8 @@ async fn records_reject_foreign_or_corrupt_state() {
     for problem in [
         MANAGED_LABEL,
         KIND_LABEL,
-        MACHINE_LABEL,
-        MACHINE_UID_LABEL,
+        SERVER_LABEL,
+        SERVER_UID_LABEL,
         SERVICE_UID_LABEL,
         PUBLICATION_LABEL,
         "namespace",
@@ -60,14 +60,14 @@ async fn records_listing_does_not_silently_skip_corrupt_records() {
 
 #[tokio::test]
 async fn record_conflict_reloads_resource_version_and_rechecks_owner() {
-    for changed_owner in [None, Some(SERVICE_UID_LABEL), Some(MACHINE_UID_LABEL)] {
+    for changed_owner in [None, Some(SERVICE_UID_LABEL), Some(SERVER_UID_LABEL)] {
         let initial = record();
         let mut desired = initial.clone();
         desired.published = true;
         let mut winner = initial.clone();
         match changed_owner {
             Some(SERVICE_UID_LABEL) => winner.publication.service.uid = "new-service".into(),
-            Some(MACHINE_UID_LABEL) => winner.publication.machine_uid = "new-machine".into(),
+            Some(SERVER_UID_LABEL) => winner.publication.server_uid = "new-server".into(),
             _ => {}
         }
 

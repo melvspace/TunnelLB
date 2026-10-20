@@ -6,12 +6,11 @@ use kube::{Api, api::PostParams};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    MACHINE_UID_LABEL, MAX_ATTEMPTS, Store, delete_params, delete_result, has_status,
-    machine_labels, machine_state_name, owned_labels, publication_labels, required_label,
-    validate_id,
+    MAX_ATTEMPTS, SERVER_UID_LABEL, Store, delete_params, delete_result, has_status, owned_labels,
+    publication_labels, required_label, server_labels, server_state_name, validate_id,
 };
 use crate::{
-    api::{MACHINE_LABEL, PUBLICATION_LABEL, Publication, SERVICE_UID_LABEL},
+    api::{PUBLICATION_LABEL, Publication, SERVER_LABEL, SERVICE_UID_LABEL},
     transport::{self, Credentials},
 };
 
@@ -29,9 +28,9 @@ impl Store {
         Api::namespaced(self.client.clone(), &self.namespace)
     }
 
-    pub async fn pin(&self, machine_uid: &str) -> Result<Option<HostPin>> {
-        let labels = machine_labels("host-pin", machine_uid)?;
-        let name = machine_state_name("host", machine_uid);
+    pub async fn pin(&self, server_uid: &str) -> Result<Option<HostPin>> {
+        let labels = server_labels("host-pin", server_uid)?;
+        let name = server_state_name("host", server_uid);
         self.secrets()
             .get_opt(&name)
             .await?
@@ -44,10 +43,10 @@ impl Store {
 
     /// First enrollment wins. A changed key or endpoint requires explicit
     /// removal of the previous pin; no retry may silently replace it.
-    pub async fn save_pin(&self, machine_uid: &str, pin: &HostPin) -> Result<()> {
+    pub async fn save_pin(&self, server_uid: &str, pin: &HostPin) -> Result<()> {
         validate_pin(pin)?;
-        let labels = machine_labels("host-pin", machine_uid)?;
-        let name = machine_state_name("host", machine_uid);
+        let labels = server_labels("host-pin", server_uid)?;
+        let name = server_state_name("host", server_uid);
         let encoded = serde_json::to_vec(pin).context("serializing host pin")?;
         let api = self.secrets();
 
@@ -84,9 +83,9 @@ impl Store {
         bail!("host pin remained contended after {MAX_ATTEMPTS} attempts")
     }
 
-    pub async fn delete_pin(&self, machine_uid: &str) -> Result<()> {
-        let labels = machine_labels("host-pin", machine_uid)?;
-        let name = machine_state_name("host", machine_uid);
+    pub async fn delete_pin(&self, server_uid: &str) -> Result<()> {
+        let labels = server_labels("host-pin", server_uid)?;
+        let name = server_state_name("host", server_uid);
         let api = self.secrets();
 
         if let Some(secret) = api.get_opt(&name).await? {
@@ -153,7 +152,7 @@ impl Store {
             let mut labels = owned_labels("credentials");
             labels.insert(PUBLICATION_LABEL.into(), id.into());
 
-            for key in [MACHINE_LABEL, MACHINE_UID_LABEL, SERVICE_UID_LABEL] {
+            for key in [SERVER_LABEL, SERVER_UID_LABEL, SERVICE_UID_LABEL] {
                 labels.insert(key.into(), required_label(&secret.metadata, key)?.into());
             }
 

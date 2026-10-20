@@ -27,9 +27,9 @@ pub(super) fn request(operation: Operation) -> Request {
     let address = "203.0.113.7".parse().unwrap();
     let publication = Publication {
         id: "pub-0123".into(),
-        machine_name: "edge".into(),
-        machine_uid: "machine-uid".into(),
-        machine_address: address,
+        server_name: "edge".into(),
+        server_uid: "server-uid".into(),
+        server_address: address,
         control_port: 22000,
         service: ServiceRequest {
             namespace: "app".into(),
@@ -51,7 +51,7 @@ pub(super) fn request(operation: Operation) -> Request {
                     proxy_protocol: ProxyProtocol::None,
                 },
             ],
-            machines: vec!["edge".into()],
+            servers: vec!["edge".into()],
             pool: None,
             replicas: 1,
         },
@@ -64,7 +64,7 @@ pub(super) fn request(operation: Operation) -> Request {
         address,
         ssh_user: "debian".into(),
         ssh_port: 22,
-        machine_uid: publication.machine_uid.clone(),
+        server_uid: publication.server_uid.clone(),
         server_config: Some(transport::server_config(&publication, &credentials).unwrap()),
         generation: Some(transport::credential_generation(
             &credentials.certificate_pem,

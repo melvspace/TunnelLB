@@ -41,7 +41,7 @@ pub struct GuardConfig {
 impl GuardConfig {
     pub fn for_publication(publication: &Publication) -> Self {
         let mut allowed = vec![AllowedDestination {
-            address: publication.machine_address,
+            address: publication.server_address,
             port: publication.control_port,
             protocol: Protocol::Tcp,
         }];

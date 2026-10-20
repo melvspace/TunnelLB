@@ -44,7 +44,7 @@ pub struct Request {
     pub address: Ipv4Addr,
     pub ssh_user: String,
     pub ssh_port: u16,
-    pub machine_uid: String,
+    pub server_uid: String,
     pub publication: Option<Publication>,
     pub server_config: Option<String>,
     pub server_certificate: Option<String>,

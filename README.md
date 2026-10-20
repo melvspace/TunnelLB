@@ -31,15 +31,12 @@ Choose a [release](https://github.com/melvspace/TunnelLB/releases) and replace
 
 ```bash
 VERSION="X.Y.Z"
-git clone --depth 1 --branch "v$VERSION" https://github.com/melvspace/TunnelLB.git
-cd TunnelLB
-
-helm upgrade --install tunnellb ./charts/tunnellb \
-  --namespace tunnellb-system --create-namespace \
-  --set image.tag="$VERSION"
+helm upgrade --install tunnellb oci://ghcr.io/melvspace/charts/tunnellb \
+  --version "$VERSION" \
+  --namespace tunnellb-system --create-namespace
 ```
 
-Images are published at `ghcr.io/melvspace/tunnellb`. See
+The chart selects the matching image from `ghcr.io/melvspace/tunnellb`. See
 [Helm values](charts/tunnellb/values.yaml) for configuration. For an existing
 namespace, set `createNamespace=false` and allow `NET_ADMIN` in its admission
 policy. Run one TunnelLB installation per cluster.

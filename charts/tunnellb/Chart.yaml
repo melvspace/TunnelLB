@@ -1,6 +1,9 @@
 apiVersion: v2
 name: tunnellb
 description: Publish Kubernetes Services through isolated outbound FRP tunnels
+home: https://github.com/melvspace/TunnelLB
+sources:
+  - https://github.com/melvspace/TunnelLB
 type: application
 version: 0.1.0 # x-release-please-version
 appVersion: "0.1.0" # x-release-please-version

@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tunnellb-demo
+  labels:
+    # Only an administrator should grant this namespace opt-in.
+    tunnellb.io/enabled: "true"
+    pod-security.kubernetes.io/enforce: restricted

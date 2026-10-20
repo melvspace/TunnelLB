@@ -1,0 +1,24 @@
+apiVersion: tunnellb.io/v1alpha1
+kind: Machine
+metadata:
+  name: edge-1
+spec:
+  # Documentation-only address: replace with your machine's public IPv4.
+  address: "203.0.113.10"
+  pool: public
+  allowedNamespaces:
+    - tunnellb-demo
+  ssh:
+    # This account needs pre-authorized key access and passwordless sudo.
+    user: tunnellb
+    port: 22
+    privateKeySecretRef:
+      # Create this Secret in the Helm release's operator namespace.
+      # See the root README for key creation/enrollment instructions.
+      name: edge-1-ssh
+      key: ssh-privatekey
+  reservedPorts:
+    - 22
+  controlPortRange:
+    start: 20000
+    end: 29999

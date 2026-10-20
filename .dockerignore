@@ -1,0 +1,9 @@
+**
+!Cargo.toml
+!Cargo.lock
+!src/
+!src/**
+!Dockerfile
+!.dockerignore
+!packaging/
+!packaging/frp-checksums.txt

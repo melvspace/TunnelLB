@@ -1,0 +1,2 @@
+- [CODING_STANDARDS.md]
+- Write human-readable code. All the changes will be reviewed by Human.

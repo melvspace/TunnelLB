@@ -1,0 +1,124 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: machines.tunnellb.io
+spec:
+  group: tunnellb.io
+  names:
+    kind: Machine
+    plural: machines
+    shortNames:
+    - tlbm
+    singular: machine
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.address
+      name: Address
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for MachineSpec via `CustomResource`
+        properties:
+          spec:
+            properties:
+              address:
+                description: Existing IPv4 address of the external machine.
+                type: string
+              allowedNamespaces:
+                default: []
+                description: Empty means all administrator-enabled namespaces.
+                items:
+                  type: string
+                type: array
+              controlPortRange:
+                default:
+                  end: 29999
+                  start: 20000
+                properties:
+                  end:
+                    format: uint16
+                    maximum: 65535.0
+                    minimum: 0.0
+                    type: integer
+                  start:
+                    format: uint16
+                    maximum: 65535.0
+                    minimum: 0.0
+                    type: integer
+                required:
+                - end
+                - start
+                type: object
+              pool:
+                nullable: true
+                type: string
+              reservedPorts:
+                default: []
+                items:
+                  format: uint16
+                  maximum: 65535.0
+                  minimum: 0.0
+                  type: integer
+                type: array
+              ssh:
+                properties:
+                  port:
+                    default: 22
+                    format: uint16
+                    maximum: 65535.0
+                    minimum: 0.0
+                    type: integer
+                  privateKeySecretRef:
+                    properties:
+                      key:
+                        default: ssh-privatekey
+                        type: string
+                      name:
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  user:
+                    type: string
+                required:
+                - privateKeySecretRef
+                - user
+                type: object
+            required:
+            - address
+            - ssh
+            type: object
+          status:
+            nullable: true
+            properties:
+              enrolledRevision:
+                nullable: true
+                type: string
+              message:
+                default: ''
+                type: string
+              observedGeneration:
+                default: 0
+                format: int64
+                type: integer
+              phase:
+                type: string
+              reason:
+                default: ''
+                type: string
+            required:
+            - phase
+            type: object
+        required:
+        - spec
+        title: Machine
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

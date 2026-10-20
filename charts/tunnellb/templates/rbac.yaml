@@ -1,0 +1,74 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "tunnellb.clusterRoleName" . }}
+  labels:
+    {{- include "tunnellb.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services", "namespaces", "pods", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["tunnellb.io"]
+    resources: ["machines"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: [""]
+    resources: ["services", "services/status"]
+    verbs: ["patch"]
+  - apiGroups: ["tunnellb.io"]
+    resources: ["machines/status", "machines/finalizers"]
+    verbs: ["patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "tunnellb.clusterRoleName" . }}
+  labels:
+    {{- include "tunnellb.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: tunnellb-controller
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "tunnellb.clusterRoleName" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tunnellb-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tunnellb.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps", "pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tunnellb-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tunnellb.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: tunnellb-controller
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tunnellb-controller

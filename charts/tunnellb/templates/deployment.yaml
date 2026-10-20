@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tunnellb-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tunnellb.labels" . | nindent 4 }}
+  annotations:
+    tunnellb.io/replica-policy: "Exactly one controller until distributed leadership is implemented; do not scale or install a second controller in this cluster."
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      {{- include "tunnellb.controllerSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tunnellb.controllerSelector" . | nindent 8 }}
+    spec:
+      serviceAccountName: tunnellb-controller
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      nodeSelector:
+        kubernetes.io/os: linux
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values: ["amd64", "arm64"]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: {{ include "tunnellb.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["controller"]
+          env:
+            - name: TUNNELLB_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: TUNNELLB_IMAGE
+              value: {{ include "tunnellb.image" . | quote }}
+            - name: TUNNELLB_IMAGE_PULL_POLICY
+              value: {{ .Values.image.pullPolicy | quote }}
+            - name: TUNNELLB_WORKER_SERVICE_ACCOUNT
+              value: tunnellb-worker
+            - name: TUNNELLB_ALLOW_PRIVATE_MACHINES
+              value: {{ .Values.allowPrivateMachines | quote }}
+            - name: TUNNELLB_HEALTH_ADDRESS
+              value: "0.0.0.0:8080"
+            {{- if .Values.requeueSeconds }}
+            - name: TUNNELLB_REQUEUE_SECONDS
+              value: {{ .Values.requeueSeconds | quote }}
+            {{- end }}
+            - name: RUST_LOG
+              value: {{ .Values.logLevel | quote }}
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi

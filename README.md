@@ -1,0 +1,287 @@
+# TunnelLB
+
+TunnelLB publishes Kubernetes `LoadBalancer` Services through an existing external
+Linux machine. The operator is written in Rust with kube-rs. It installs pinned
+FRP binaries over SSH and creates an outbound connector for each Service/Machine
+pair.
+
+```text
+Internet → edge IPv4:Service.port → encrypted FRP tunnel → Service ClusterIP → Pods
+                                       ↑
+                              cluster initiates connection
+```
+
+The edge is a dedicated proxy, with no Kubernetes credentials, cluster membership,
+Pod-network routes or Tailscale membership. Application TLS terminates inside the
+cluster. The public IP already belongs to the supplied machine; TunnelLB does not
+allocate addresses from a cloud provider.
+
+This is an initial implementation. Read the supported configuration and security
+boundaries below before exposing applications.
+
+## Supported configuration
+
+- Linux Kubernetes nodes, IPv4 Services, kube-proxy and pod veth networking.
+  The integration target is k3s `v1.35.1+k3s1` with its default networking.
+- **Disable k3s ServiceLB** using `--disable=servicelb` on all servers. On the
+  tested version, its EndpointSlice status worker clears TunnelLB ingress
+  addresses even when `loadBalancerClass` is set.
+- Dedicated Debian 12/13 or Ubuntu 22.04/24.04 edges, systemd ≥244, amd64 or arm64.
+  Supply root SSH access or an account with passwordless `sudo -n`.
+- TCP and UDP. SCTP, transparent original source IP, IPv6, arbitrary LAN targets,
+  cloud provisioning and floating IP failover are outside this version.
+- One controller replica and one installation per cluster. The chart uses
+  `Recreate`; do not scale it up.
+- The dedicated operator namespace must permit a trusted init container with
+  `NET_ADMIN`. Workers themselves are nonroot, capability-free and tokenless.
+  The chart's namespace admission setting allows that init container; no
+  workload requests `privileged: true`, host networking or host PID access.
+- NetworkPolicy enforcement is required. CNI socket load balancing that rewrites
+  destinations before pod iptables is not a supported configuration.
+
+## Install
+
+Build and push an image to a registry your nodes can access:
+
+```bash
+docker build -t registry.example.com/tunnellb:0.1.0 .
+docker push registry.example.com/tunnellb:0.1.0
+helm upgrade --install tunnellb ./charts/tunnellb \
+  --namespace tunnellb-system --create-namespace \
+  --set image.repository=registry.example.com/tunnellb \
+  --set image.tag=0.1.0
+```
+
+The chart targets Helm 4. For an existing, dedicated namespace, add
+`--set createNamespace=false` and configure its admission policy yourself.
+`networkPolicy.apiServerCIDRs` can restrict controller egress to the API's exact
+addresses. Without it, only the controller receives TCP 443/6443 egress to any
+address. Connectors and SSH Jobs get separate, narrower policies.
+
+The controller needs Kubernetes API credentials. The forwarding and SSH worker
+pods have `automountServiceAccountToken: false`. SSH private-key Secrets are read
+only from the operator namespace.
+
+## Register a machine
+
+Authorize a dedicated SSH public key on the edge using your normal VPS setup.
+The matching private key stays in a Kubernetes Secret:
+
+```bash
+kubectl -n tunnellb-system create secret generic edge-1-ssh \
+  --from-file=ssh-privatekey=/path/to/private-key
+```
+
+Apply a Machine, replacing the documentation address and SSH user:
+
+```yaml
+apiVersion: tunnellb.io/v1alpha1
+kind: Machine
+metadata:
+  name: edge-1
+spec:
+  address: "203.0.113.10"
+  ssh:
+    user: root
+    privateKeySecretRef:
+      name: edge-1-ssh
+  pool: public
+  allowedNamespaces: [apps]
+```
+
+The first Job discovers the SSH host key. The controller persists it before a
+second, strictly pinned Job logs in and installs FRP. Subsequent key changes
+block SSH operations. This is **trust on first use**; first-contact identity is
+not independently verified.
+
+Enrollment installs checksum-verified FRP 0.71.1 and owned systemd units. It
+creates a dedicated locked service account and retains your original authorized
+key. The operator does not configure cloud firewalls, flush host firewall rules
+or join the machine to your VPN.
+
+Allow the management SSH port, intended public Service ports and the allocated
+TCP tunnel control ports through your firewall. `controlPortRange` defaults to
+20000–29999. `reservedPorts` excludes additional ports from allocation. Management
+SSH is always reserved.
+
+```bash
+kubectl get machines
+kubectl get machine edge-1 -o yaml
+kubectl -n tunnellb-system get jobs,pods
+```
+
+Changing the Machine address or SSH port requires cleanup and a new enrollment.
+To retry installation intentionally after fixing an edge, change the
+`tunnellb.io/re-enroll` annotation on the Machine. Unchanged enrolled Machines do
+not continually run root installation Jobs.
+
+## Publish a Service
+
+An administrator enables a namespace:
+
+```bash
+kubectl label namespace apps tunnellb.io/enabled=true
+```
+
+Application owners can then publish ordinary, pod-selected Services:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: apps
+spec:
+  type: LoadBalancer
+  loadBalancerClass: tunnellb.io/edge
+  allocateLoadBalancerNodePorts: false
+  selector:
+    app: web
+  ports:
+    - name: https
+      port: 443
+      targetPort: 8443
+      protocol: TCP
+```
+
+The Service receives the Machine's address in `status.loadBalancer.ingress`,
+with `ipMode: Proxy`. `TunnelLBReady` reports allocation, provisioning and tunnel
+registration state. Registration does not prove application-level health.
+Source addresses are those of the connector unless the receiver supports the
+optional PROXY protocol.
+
+| Annotation | Example | Meaning |
+|---|---|---|
+| `tunnellb.io/machines` | `edge-1,edge-2` | Select these Machines explicitly. |
+| `tunnellb.io/pool` | `public` | Restrict selection to a Machine pool. |
+| `tunnellb.io/replicas` | `"2"` | Request two independent edge addresses. |
+| `tunnellb.io/proxy-protocol` | `https=v2,minecraft=v2` | Enable framing on named Service ports. |
+
+Without selection annotations, one eligible Machine is chosen and the assignment
+is persisted. Adding Machines does not move existing publications. An explicit
+Machine list determines the number of endpoints; an accompanying `replicas`
+value must match its length. Pool and explicit Machine selection are mutually
+exclusive.
+
+Machines can restrict namespaces with `allowedNamespaces`; an empty list permits
+every administrator-enabled namespace. A Machine holds one public address.
+Different publications must use distinct **numeric ports**, including across
+TCP/UDP, because FRP's authorization allowlist is numeric. One Service can publish
+TCP and UDP on the same number. Each publication also consumes a separate tunnel
+control port.
+
+PROXY framing is off by default. TCP supports v1/v2; UDP supports only v2 and
+requires a compatible application. FRP's UDP association framing is not a
+universal replacement for transparent source IP. The edge can forge PROXY
+addresses; do not treat them as authentication.
+
+Only pod-backed, IPv4 ClusterIP Services are supported. Headless, selectorless,
+ExternalName and hostNetwork backends are rejected, as are manual or mismatched
+EndpointSlices. `externalTrafficPolicy` and `internalTrafficPolicy` must be
+`Cluster`; source-range restrictions and manually assigned `loadBalancerIP` are
+not implemented. Existing NodePorts must be removed, even after setting
+`allocateLoadBalancerNodePorts: false`.
+
+If your application namespace denies ingress, explicitly allow the generated
+connector pods from `tunnellb-system` to the selected application ports. TunnelLB
+does not edit tenant ingress policies.
+
+## Lifecycle and recovery
+
+Each publication has independent credentials, an FRP server unit and one
+connector Deployment. Backend Pod replacement does not change the immutable
+connector configuration. Service destination or port changes stop the old
+connector before applying the replacement; existing connections are interrupted.
+
+Edge outages retain previously published IPs. Connectors reconnect, and status
+reports degraded registration. Multiple addresses are independent entry points;
+TunnelLB does not move an address, promise session failover or manage DNS.
+
+The last approved forwarding configuration continues if the controller or API
+is unavailable. Service revocation requires the controller and the node running
+the connector to be reachable. Once the connector process exits, its backend
+connections end. A hostile edge may still listen on its public ports or serve
+its own content.
+
+Delete Services before deleting a Machine. Finalizers stop connectors, remove
+remote publication units and release reservations. Machine deletion also removes
+owned runtime files. Cleanup waits when the remote host is unreachable.
+
+An administrator can explicitly abandon an unreachable Machine:
+
+```bash
+kubectl annotate machine edge-1 tunnellb.io/force-delete=true
+kubectl delete machine edge-1
+```
+
+Local connector termination is still required. Remote files/listeners may remain.
+Service-level force deletion only detaches the Service after local termination:
+its reservation remains until remote cleanup succeeds. It cannot free ports
+still occupied by another tenant's abandoned remote process.
+
+Uninstall retains ownership/revocation markers and the locked edge account.
+Reusing an edge under a new Machine UID requires an administrator to inspect and
+remove the old ownership markers on the host, or rebuild that dedicated host.
+Do not delete operator state Secrets or allocation ConfigMaps to work around a
+pending cleanup.
+
+## Security boundary
+
+The edge can send traffic only through proxies configured by the cluster-side
+client. It cannot supply an arbitrary backend address. Application TLS keys stay
+inside the cluster, and no SSH agent forwarding is enabled.
+
+Connectors and SSH clients are separate from the controller. Every worker starts
+behind an exact pod-network egress allowlist installed before its application
+process starts, plus a NetworkPolicy. The SSH allowlist contains only the edge
+SSH endpoint; the connector allowlist contains its edge control endpoint and
+published Service ports. No DNS, API, node or general LAN route is intentionally
+allowed. Guard installation failure prevents the worker from starting.
+
+These controls do not make published applications safe from malicious input.
+EndpointSlice validation is reactive, with a nonzero controller response window;
+it is not an admission policy for hostile administrators. A compromised kernel
+or a privileged administrator is outside this boundary. Keep tenants away from
+the operator namespace and Machine/state-management permissions.
+
+TLS passthrough alone cannot guarantee confidentiality against an edge that can
+obtain a new valid certificate using IP-based domain validation. Use suitable
+DNS validation and CA authorization controls for that threat model.
+
+## Development
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
+cargo run --locked -- crd > charts/tunnellb/crds/machines.yaml
+helm lint charts/tunnellb --namespace tunnellb-system --strict
+```
+
+The image bundles the official FRP release binaries and verifies checksums during
+the build and before remote installation. Tests cover parsing, allocation,
+ownership, API object normalization, credentials, host-key handling, generated
+scripts, process supervision and guard configuration.
+
+The ignored integration test requires a prepared, disposable Linux Docker
+environment: a `tunnellb-e2e` k3d cluster with a loopback API and ServiceLB
+disabled, and a fresh `tunnellb-e2e-edge` container built from
+[`tests/fixtures/edge.Dockerfile`](tests/fixtures/edge.Dockerfile). The edge needs
+private cgroups, no host mounts, an authorized test SSH key and an unrelated
+`e2e-unpublished.service` HTTP listener on port 18090. Label both the edge and
+their shared Docker network `tunnellb.io/e2e=tunnellb-e2e`.
+
+Keep the kubeconfig and generated SSH key under `/tmp/codex/tunnellb-e2e/`:
+
+```bash
+TUNNELLB_E2E_ALLOW_DESTRUCTIVE=1 \
+TUNNELLB_E2E_KUBECONFIG=/tmp/codex/tunnellb-e2e/kubeconfig \
+TUNNELLB_E2E_SSH_KEY=/tmp/codex/tunnellb-e2e/ssh/id_ed25519 \
+TUNNELLB_E2E_K3D="$(command -v k3d)" \
+cargo test --locked --test e2e -- --ignored --nocapture
+```
+
+The test builds/imports images, installs Helm, enrolls the edge and exercises
+forwarding, guards, restarts and cleanup. It refuses existing Machines or
+TunnelLB Services. Never supply a production kubeconfig. The implementation
+contract and verification scope are in [`PLAN.md`](PLAN.md).

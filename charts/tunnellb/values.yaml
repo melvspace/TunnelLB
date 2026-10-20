@@ -1,0 +1,43 @@
+# Install into a dedicated namespace, for example --namespace tunnellb-system.
+# With true, this chart owns that Namespace. For a new namespace, use Helm 4
+# with its default server-side apply and --create-namespace: Helm must create
+# its release storage before applying this chart's Namespace policy/ownership.
+# For a pre-existing dedicated Namespace, set false and configure its Pod
+# Security admission policy yourself to permit the workers' NET_ADMIN init.
+createNamespace: true
+
+image:
+  # Local image: build and load it onto cluster nodes before installation.
+  repository: tunnellb
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# Applied to both ServiceAccounts so controller-created workers inherit them.
+imagePullSecrets: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+networkPolicy:
+  # Supply actual API Service AND endpoint addresses as /32 or /128
+  # CIDRs: CNI implementations may enforce policy before or after Service DNAT.
+  # Empty allows the controller to reach any address on apiServerPorts only,
+  # so bootstrap needs no guessed Service IP. Set explicit CIDRs to narrow it.
+  # This fallback applies only to the trusted controller, never to workers.
+  apiServerCIDRs: []
+  apiServerPorts: [443, 6443]
+
+# Zero omits the environment variable and uses the operator's default interval.
+requeueSeconds: 0
+
+# Only for isolated integration tests with private disposable machines.
+allowPrivateMachines: false
+logLevel: info
+
+# Replica count is deliberately not configurable until distributed leadership
+# exists. The Deployment always uses replicas: 1 and strategy: Recreate.

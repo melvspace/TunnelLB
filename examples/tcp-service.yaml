@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: tunnellb-demo
+  annotations:
+    tunnellb.io/pool: public
+spec:
+  type: LoadBalancer
+  loadBalancerClass: tunnellb.io/edge
+  allocateLoadBalancerNodePorts: false
+  # Match real, ready application Pods. TLS terminates in those Pods.
+  selector:
+    app: web
+  ports:
+    - name: https
+      protocol: TCP
+      port: 443
+      targetPort: 8443

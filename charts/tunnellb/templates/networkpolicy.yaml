@@ -1,0 +1,39 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tunnellb-default-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tunnellb.labels" . | nindent 4 }}
+  annotations:
+    tunnellb.io/worker-policy: "Controller-generated per-publication policies grant workers only their approved destinations. No blanket worker egress is granted here."
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tunnellb-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tunnellb.labels" . | nindent 4 }}
+  annotations:
+    tunnellb.io/health-probes: "Ingress remains denied; Kubernetes permits kubelet traffic from the pod's own node. Verify this behavior with your CNI."
+    tunnellb.io/api-egress: "Explicit CIDRs restrict API destinations; an empty list allows any address on the configured API ports (443 and 6443 by default). Include Service VIP and real endpoints when narrowing for CNI DNAT behavior."
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "tunnellb.controllerSelector" . | nindent 6 }}
+  policyTypes: ["Ingress", "Egress"]
+  egress:
+    - to:
+        {{- range (.Values.networkPolicy.apiServerCIDRs | default (list "0.0.0.0/0" "::/0")) }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        {{- range .Values.networkPolicy.apiServerPorts }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}

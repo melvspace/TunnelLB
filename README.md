@@ -295,7 +295,7 @@ Install a GitHub App on this repository with **Contents**, **Issues**, and
 
 | Setting | Name | Value |
 |---|---|---|
-| Actions variable | `APP_ID` | GitHub App ID |
+| Actions secret | `APP_ID` | GitHub App ID |
 | Actions secret | `APP_PRIVATE_KEY` | GitHub App PEM private key |
 
 The release workflow creates a short-lived, repository-scoped App token. Its

@@ -41,16 +41,19 @@ boundaries below before exposing applications.
 
 ## Install
 
-Build and push an image to a registry your nodes can access:
+GitHub releases publish amd64/arm64 images to
+`ghcr.io/melvspace/tunnellb:<version>`; the version has no `v` prefix. Check out
+the matching [GitHub release](https://github.com/melvspace/TunnelLB/releases) tag
+for its Helm chart, then replace `VERSION` below with that published version:
 
 ```bash
-docker build -t registry.example.com/tunnellb:0.1.0 .
-docker push registry.example.com/tunnellb:0.1.0
 helm upgrade --install tunnellb ./charts/tunnellb \
   --namespace tunnellb-system --create-namespace \
-  --set image.repository=registry.example.com/tunnellb \
-  --set image.tag=0.1.0
+  --set image.tag=VERSION
 ```
+
+For local development, build and load `tunnellb:<version>` using the version in
+`Cargo.toml`, then install with `--set image.repository=tunnellb`.
 
 The chart targets Helm 4. For an existing, dedicated namespace, add
 `--set createNamespace=false` and configure its admission policy yourself.
@@ -278,6 +281,38 @@ the operator namespace and Server/state-management permissions.
 TLS passthrough alone cannot guarantee confidentiality against an edge that can
 obtain a new valid certificate using IP-based domain validation. Use suitable
 DNS validation and CA authorization controls for that threat model.
+
+## Releases
+
+[Release Please](https://github.com/googleapis/release-please-action) maintains a
+release PR from Conventional Commits on `main`. Merging that PR creates the
+`vX.Y.Z` tag and GitHub release. The first release is `v0.1.0`; later releases
+update Cargo manifests, the changelog, and Helm versions together. The chart's
+image tag matches the crate version.
+
+Install a GitHub App on this repository with **Contents**, **Issues**, and
+**Pull requests** read/write permissions. Configure these repository settings:
+
+| Setting | Name | Value |
+|---|---|---|
+| Actions variable | `APP_ID` | GitHub App ID |
+| Actions secret | `APP_PRIVATE_KEY` | GitHub App PEM private key |
+
+The release workflow creates a short-lived, repository-scoped App token. Its
+release PRs receive normal CI checks. Use Conventional Commit titles when
+squashing PRs, such as `fix: ...`, `feat: ...`, or `ci: ...`.
+
+Publishing reruns Rust and Helm checks against the released commit, then builds
+the existing Dockerfile for `linux/amd64` and `linux/arm64`. Only complete version
+tags such as `0.1.0` are published. A failed publication can be retried with
+GitHub Actions' **Re-run failed jobs** on that release's workflow.
+
+GHCR authentication uses the job's `GITHUB_TOKEN` with `packages: write`; it
+needs no registry password or PAT. GitHub initially creates packages as private.
+For anonymous cluster pulls, make the package public after the first push;
+otherwise configure `imagePullSecrets`. An existing package must grant this
+repository Actions access. See [GitHub's registry
+documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
 ## Development
 

@@ -7,9 +7,8 @@
 createNamespace: true
 
 image:
-  # Local image: build and load it onto cluster nodes before installation.
-  repository: tunnellb
-  tag: "0.1.0"
+  repository: ghcr.io/melvspace/tunnellb
+  tag: "0.1.0" # x-release-please-version
   pullPolicy: IfNotPresent
 
 # Applied to both ServiceAccounts so controller-created workers inherit them.

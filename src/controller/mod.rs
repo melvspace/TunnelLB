@@ -38,7 +38,11 @@ use service::{is_managed, reconcile_service};
 pub struct Config {
     #[arg(long, env = "TUNNELLB_NAMESPACE", default_value = "tunnellb-system")]
     pub namespace: String,
-    #[arg(long, env = "TUNNELLB_IMAGE", default_value = "tunnellb:0.1.0")]
+    #[arg(
+        long,
+        env = "TUNNELLB_IMAGE",
+        default_value = concat!("ghcr.io/melvspace/tunnellb:", env!("CARGO_PKG_VERSION"))
+    )]
     pub image: String,
     #[arg(
         long,

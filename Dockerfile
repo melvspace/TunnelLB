@@ -1,4 +1,4 @@
-# Build locally: docker build -t tunnellb:0.1.0 .
+# Build locally: docker build -t tunnellb:<Cargo.toml version> .
 # Use buildx --platform linux/amd64,linux/arm64 with native builders or emulation
 # for a multi-platform build. Both remote frps architectures are in every image.
 FROM --platform=$BUILDPLATFORM debian:bookworm-20261005-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS frp

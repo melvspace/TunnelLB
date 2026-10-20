@@ -21,8 +21,9 @@ Use a namespace that only TunnelLB uses.
 If the namespace is already present, add `--set createNamespace=false` to the Helm command.
 The admission policy of this namespace must let init containers use `NET_ADMIN`.
 
-Select a version from [GitHub Releases](https://github.com/melvspace/TunnelLB/releases).
-Replace `X.Y.Z` with the version number without `v`.
+Select a chart version from [GitHub Releases](https://github.com/melvspace/TunnelLB/releases).
+Chart releases use `chart-vX.Y.Z` tags and have their own versions.
+Replace `X.Y.Z` with the chart version number without `chart-v`.
 
 ```bash
 helm upgrade --install tunnellb oci://ghcr.io/melvspace/charts/tunnellb \
@@ -170,3 +171,15 @@ TunnelLB connects again when the server is available.
    ```
 
 If TunnelLB cannot connect to a server, removal waits until the connection is available.
+
+## Releases
+
+Release Please opens separate release PRs for the application and Helm chart.
+Application tags use `vX.Y.Z` and publish the container image.
+Chart tags use `chart-vX.Y.Z` and publish the Helm chart.
+Changes only under `charts/tunnellb` do not trigger an application release.
+
+To use a new image by default, wait for the image to be published.
+Then update `appVersion` in `charts/tunnellb/Chart.yaml` and `image.tag` in
+`charts/tunnellb/values.yaml` together, using a `fix(chart):` or `feat(chart):` commit.
+Release Please bumps the chart's `version` independently.

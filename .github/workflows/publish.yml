@@ -13,9 +13,11 @@ concurrency:
 
 jobs:
   checks:
+    if: startsWith(github.event.release.tag_name, 'v') || startsWith(github.event.release.tag_name, 'chart-v')
     uses: ./.github/workflows/ci.yml
 
   image:
+    if: startsWith(github.event.release.tag_name, 'v')
     needs: checks
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -39,6 +41,7 @@ jobs:
           from pathlib import Path
 
           version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+
           if os.environ["RELEASE_TAG"] != f"v{version}":
               raise SystemExit("Release tag must be v<Cargo.toml package version>")
           PY
@@ -83,7 +86,8 @@ jobs:
           cache-to: type=gha,mode=max,scope=release-image
 
   chart:
-    needs: image
+    if: startsWith(github.event.release.tag_name, 'chart-v')
+    needs: checks
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -101,6 +105,17 @@ jobs:
         with:
           version: v4.3.1
 
+      - name: Verify release tag matches the chart version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          chart_version="$(helm show chart charts/tunnellb | awk '$1 == "version:" { print $2 }')"
+
+          if [[ "$RELEASE_TAG" != "chart-v$chart_version" ]]; then
+            echo "Release tag must be chart-v<Chart.yaml version>" >&2
+            exit 1
+          fi
+
       - name: Package chart
         run: helm package charts/tunnellb --destination "$RUNNER_TEMP/charts"
 
@@ -115,7 +130,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          helm push "$RUNNER_TEMP/charts/tunnellb-${RELEASE_TAG#v}.tgz" \
+          helm push "$RUNNER_TEMP/charts/tunnellb-${RELEASE_TAG#chart-v}.tgz" \
             "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
 
       - name: Log out of GitHub Container Registry

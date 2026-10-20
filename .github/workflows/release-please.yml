@@ -28,7 +28,7 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
 
-      - name: Maintain release PR and publish merged releases
+      - name: Maintain release PRs and publish merged releases
         uses: googleapis/release-please-action@v4
         with:
           token: ${{ steps.app-token.outputs.token }}

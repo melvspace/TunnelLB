@@ -1,22 +1,22 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "baaaa2a506a8655df35d815dd22536ebcb0adf1e",
+  "separate-pull-requests": true,
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false,
   "packages": {
     ".": {
       "release-type": "rust",
       "include-component-in-tag": false,
       "initial-version": "0.1.0",
-      "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": false,
-      "extra-files": [
-        {
-          "type": "generic",
-          "path": "charts/tunnellb/Chart.yaml"
-        },
-        {
-          "type": "generic",
-          "path": "charts/tunnellb/values.yaml"
-        }
+      "exclude-paths": [
+        "charts/tunnellb"
       ]
+    },
+    "charts/tunnellb": {
+      "release-type": "helm",
+      "component": "chart",
+      "include-component-in-tag": true
     }
   }
 }

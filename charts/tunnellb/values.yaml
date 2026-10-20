@@ -8,7 +8,7 @@ createNamespace: true
 
 image:
   repository: ghcr.io/melvspace/tunnellb
-  tag: "0.1.0" # x-release-please-version
+  tag: "0.1.0"
   pullPolicy: IfNotPresent
 
 # Applied to both ServiceAccounts so controller-created workers inherit them.

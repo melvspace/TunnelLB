@@ -12,6 +12,8 @@
 //! same Machine/address. One publication may expose TCP and UDP on the same
 //! number, but its control port must be distinct from all of its public ports.
 
+mod control;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     net::Ipv4Addr,
@@ -147,8 +149,8 @@ impl Ledger {
     /// Control ports are chosen in ascending order. A compatible allocation keeps
     /// its existing control port, even if a lower port has since become available.
     /// Within this ledger, conflicts are checked by Machine name, UID or address.
-    /// Callers using separate ledgers must enforce unique Machine addresses and
-    /// persist each result with optimistic concurrency before using a reservation.
+    /// Callers using separate ledgers must arbitrate reservations on the shared
+    /// host and persist each result with optimistic concurrency before use.
     pub fn allocate(
         &mut self,
         publication_id: &str,

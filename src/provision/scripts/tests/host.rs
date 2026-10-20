@@ -1,5 +1,10 @@
-use super::{digest, enroll_script, shell_quote};
-use crate::provision::Request;
+use super::{digest, enroll_script, reserve_script, shell_quote};
+use crate::provision::{
+    AllocationOutcome, Request,
+    binary::{AMD64_SHA256, ARM64_SHA256},
+};
+
+const BINARY: &[u8] = b"#!/bin/sh\nexit 0\n";
 
 pub(super) struct TestHost(tempfile::TempDir);
 
@@ -11,6 +16,7 @@ impl TestHost {
         let directory = tempfile::tempdir_in("/tmp/codex").unwrap();
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::create_dir(directory.path().join("systemd")).unwrap();
+        std::fs::create_dir(directory.path().join("active")).unwrap();
 
         Self(directory)
     }
@@ -33,36 +39,55 @@ chown() {{ :; }}
 getent() {{ return 1; }}
 useradd() {{ :; }}
 ss() {{
+    printf '%s\n' "$*" >> "$test_root/socket-probes"
+    if [ "$2" = -lntu ]; then
+        if [ -f "$test_root/sockets-snapshot" ]; then cat "$test_root/sockets-snapshot"; return; fi
+        for socket in "$test_root"/sockets-tcp-* "$test_root"/sockets-udp-*; do
+            [ -s "$socket" ] || continue
+            endpoint=${{socket##*/sockets-}}
+            protocol=${{endpoint%-*}}
+            if [ "$protocol" = tcp ]; then state=LISTEN; else state=UNCONN; fi
+            printf '%s %s 0 0 0.0.0.0:%s *:*\n' "$protocol" "$state" "${{endpoint##*-}}"
+        done
+        return 0
+    fi
     case "$2" in -lntp) protocol=tcp ;; -lnup) protocol=udp ;; *) return 1 ;; esac
     sockets="$test_root/sockets-$protocol-${{3##*:}}"
     if [ -f "$sockets" ]; then cat "$sockets"; fi
 }}
 sleep() {{ :; }}
-install() {{ command cp -- "${{@: -2:1}}" "${{@: -1}}"; }}
-sha256sum() {{
-    if [ "$1" = "$binary" ]; then
-        case "$(uname -m)" in x86_64) checksum=$amd64_digest ;; *) checksum=$arm64_digest ;; esac
-        printf '%s  %s\n' "$checksum" "$binary"
-    else command sha256sum "$@"; fi
+sync() {{
+    printf 'sync %s\n' "$*" >> "$test_root/durability"
+    if [[ "$1" == *.claim ]] && [ -f "$test_root/fail-claim-sync" ]; then
+        command rm -f "$test_root/fail-claim-sync"
+        return 1
+    fi
+    if [ "$1" = "$retired" ] && [ -f "$test_root/fail-retired-sync" ]; then return 1; fi
+    if [ -f "$test_root/fail-directory-sync" ] && [ "$1" = "$(cat "$test_root/fail-directory-sync")" ]; then return 1; fi
 }}
+install() {{ command cp -- "${{@: -2:1}}" "${{@: -1}}"; chmod 0755 "${{@: -1}}"; }}
 systemctl() {{
     printf '%s\n' "$*" >> "$test_root/commands"
+    local active="$test_root/active/${{unit:-unused}}"
     case "$1" in
         show)
             case "$3" in
                 --property=FragmentPath) printf '%s\n' "$unitfile" ;;
-                --property=MainPID) if [ -f "$test_root/active" ]; then printf '123\n'; else printf '0\n'; fi ;;
+                --property=MainPID) if [ -f "$active" ]; then cat "$active"; else printf '0\n'; fi ;;
                 --property=DropInPaths) printf '\n' ;;
                 *) return 1 ;;
             esac ;;
-        is-active) [ -f "$test_root/active" ] ;;
+        is-active) [ -f "$active" ] ;;
         restart)
             [ ! -f "$test_root/fail-start" ] || return 1
-            printf '%s\n' "$unit" > "$test_root/active" ;;
+            printf '%s\n' "$BASHPID" > "$active" ;;
         disable)
             [ ! -f "$test_root/fail-stop" ] || return 1
-            command rm -f "$test_root/active" ;;
-        list-units) if [ -f "$test_root/active" ]; then cat "$test_root/active"; fi ;;
+            command rm -f "$active" ;;
+        list-units)
+            for active in "$test_root/active/"*; do
+                if [[ "${{active##*/}}" == ${{@: -1}} ]]; then printf '%s\n' "${{active##*/}}"; fi
+            done ;;
         enable|reset-failed|daemon-reload) : ;;
         *) return 1 ;;
     esac
@@ -77,12 +102,18 @@ rm() {{
         command rm -f "$target/owner" "$test_root/fail-owned-delete"
         return 1
     fi
+    if [ "$target" = "$generations/${{publication:-}}" ] && [ -f "$test_root/fail-generation-delete" ]; then
+        command rm -f "$test_root/fail-generation-delete"
+        return 1
+    fi
     command rm "$@"
 }}
 "#,
             root = shell_quote(root.to_str().unwrap())
         );
         let mapped = script
+            .replace(AMD64_SHA256, &digest(BINARY))
+            .replace(ARM64_SHA256, &digest(BINARY))
             .replace("/var/lib/tunnellb", self.path("state").to_str().unwrap())
             .replace("/opt/tunnellb", self.path("opt").to_str().unwrap())
             .replace(
@@ -125,8 +156,26 @@ rm() {{
     }
 
     pub(super) fn enroll(&self, request: &Request) {
-        let binary = b"#!/bin/sh\nexit 0\n";
-        self.success(enroll_script(request, Some(binary), &digest(binary)).unwrap());
+        self.success(enroll_script(request, Some(BINARY), &digest(BINARY)).unwrap());
+    }
+
+    pub(super) fn reserve(&self, request: &Request) -> AllocationOutcome {
+        let output = self.run(reserve_script(request).unwrap());
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        crate::provision::scripts::parse_allocation(&String::from_utf8_lossy(&output.stdout))
+            .unwrap()
+    }
+
+    pub(super) fn active(&self, request: &Request) -> std::path::PathBuf {
+        self.path(&format!(
+            "active/tunnellb-{}@{}.service",
+            request.machine_uid,
+            request.publication.as_ref().unwrap().id
+        ))
     }
 
     pub(super) fn flag(&self, flag: &str) {

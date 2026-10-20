@@ -26,6 +26,7 @@ mod health;
 mod kubernetes;
 mod machine;
 mod publication;
+mod reservation;
 mod service;
 use health::serve_health;
 use machine::reconcile_machine;

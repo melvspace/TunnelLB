@@ -29,6 +29,7 @@ use super::{
     Context,
     kubernetes::{apply_owned, delete_owned},
     machine::request_for,
+    reservation::reserve_publication,
 };
 
 pub(super) async fn ensure_publication(
@@ -54,14 +55,25 @@ pub(super) async fn ensure_publication(
         return Ok(false);
     }
 
-    ensure!(
-        context
-            .store
-            .allocate(machine, &publication.service, &publication.id)
-            .await?
-            == publication.control_port,
-        "publication lease differs from persisted control port"
-    );
+    let control = context
+        .store
+        .allocate(machine, &publication.service, &publication.id)
+        .await?;
+
+    if control != publication.control_port {
+        // A crash can leave the confirmed host selection in the ledger before
+        // it reaches the record. No Apply is allowed before reserved is saved.
+        ensure!(
+            !record.reserved && record.applied_hash.is_none() && !record.published,
+            "publication lease differs from persisted control port"
+        );
+        record.publication.control_port = control;
+        record.config_hash = publication_hash(&record.publication, &context.resources)?;
+        context.store.save_record(record).await?;
+
+        return Ok(false);
+    }
+
     let Some(pin) = context.store.pin(&publication.machine_uid).await? else {
         return Ok(false);
     };
@@ -80,6 +92,14 @@ pub(super) async fn ensure_publication(
         );
         record.credential_generation = Some(generation.clone());
         context.store.save_record(record).await?;
+    }
+
+    if !record.reserved {
+        reserve_publication(record, machine, &pin, &generation, context).await?;
+
+        // Reservation may choose a different control port. Use the newly
+        // persisted publication on the next pass before constructing Apply.
+        return Ok(false);
     }
 
     let healthy = matching && existing.as_ref().is_some_and(deployment_ready);

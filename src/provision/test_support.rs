@@ -2,7 +2,7 @@ use std::net::Ipv4Addr;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 
-use super::{Operation, Request, pin::host_label};
+use super::{Operation, Request, ReservationRequest, pin::host_label};
 use crate::{
     api::{Protocol, ProxyProtocol, Publication, PublishedPort, ServiceRequest},
     transport,
@@ -73,5 +73,9 @@ pub(super) fn request(operation: Operation) -> Request {
         server_private_key: Some(credentials.private_key_pem),
         publication: Some(publication),
         expected_known_hosts: Some(host_key(address, 22, 1)),
+        reservation: Some(ReservationRequest {
+            control_port_range: crate::api::PortRange::default(),
+            excluded_ports: Vec::new(),
+        }),
     }
 }

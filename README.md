@@ -115,6 +115,31 @@ To retry installation intentionally after fixing an edge, change the
 `tunnellb.io/re-enroll` annotation on the Machine. Unchanged enrolled Machines do
 not continually run root installation Jobs.
 
+## Share a machine across clusters
+
+Register the same address in each cluster, with an SSH Secret in each operator
+namespace. No cluster identifier or separate port ranges are required. Each
+Machine's Kubernetes UID identifies its registration on the host; the Machine
+names may be the same.
+
+The host reserves public ports before starting a tunnel and chooses a free
+control port from that Machine's `controlPortRange`. Reservations are serialized
+under a host-wide lock and persist while connectors are disconnected. Different
+clusters must use different public **port numbers**, including across TCP/UDP.
+For example, cluster A can publish TCP 443 while cluster B publishes TCP 25565
+and UDP 24454.
+
+A conflicting Service reports `PortConflict` and retries on the next ten-minute
+provisioning window; it cannot take over another registration's ports. Removing
+one Machine stops only its publications and releases only its reservations.
+Other clusters continue using the host.
+An abandoned registration keeps its remote reservations until cleaned up.
+
+All participating cluster administrators must be trusted: root-capable SSH
+access can change any host state. `reservedPorts` is a local cluster policy;
+configure the same exclusions in each cluster when needed. Keep one Machine
+object per address within each cluster.
+
 ## Publish a Service
 
 An administrator enables a namespace:
@@ -219,11 +244,17 @@ Service-level force deletion only detaches the Service after local termination:
 its reservation remains until remote cleanup succeeds. It cannot free ports
 still occupied by another tenant's abandoned remote process.
 
-Uninstall retains ownership/revocation markers and the locked edge account.
-Reusing an edge under a new Machine UID requires an administrator to inspect and
-remove the old ownership markers on the host, or rebuild that dedicated host.
+Uninstall retains the registration's revocation marker, locked edge account and
+shared, versioned FRP binary cache. A new Machine UID can immediately reuse ports
+released by completed cleanup. The retired UID cannot enroll again.
 Do not delete operator state Secrets or allocation ConfigMaps to work around a
 pending cleanup.
+
+Hosts installed with the older, single-owner layout are rejected without
+conversion. Complete their cleanup using the old operator first, verify that no
+TunnelLB units remain running, then archive the remaining `/var/lib/tunnellb`
+and `/opt/tunnellb` directories before enrolling with this version. Do not remove
+ownership markers from an active installation.
 
 ## Security boundary
 
@@ -285,3 +316,11 @@ The test builds/imports images, installs Helm, enrolls the edge and exercises
 forwarding, guards, restarts and cleanup. It refuses existing Machines or
 TunnelLB Services. Never supply a production kubeconfig. The implementation
 contract and verification scope are in [`PLAN.md`](PLAN.md).
+
+Set `TUNNELLB_E2E_SECOND_KUBECONFIG` to a second disposable k3d cluster's
+kubeconfig, `TUNNELLB_E2E_SECOND_CLUSTER` to its name, and
+`TUNNELLB_E2E_FIXTURE` to the shared Docker ownership label to exercise
+shared-host enrollment, automatic control-port selection,
+cross-cluster conflicts, uninterrupted traffic during another registration's
+deletion, and released-port reuse. Both clusters must share the isolated test
+edge's Docker network.

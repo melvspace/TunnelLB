@@ -1,3 +1,4 @@
+mod allocations;
 mod artifacts;
 mod outcomes;
 mod runtime;
@@ -50,6 +51,7 @@ fn request() -> provision::Request {
         server_certificate: Some(SECRET.into()),
         server_private_key: Some(SECRET.into()),
         expected_known_hosts: Some("203.0.113.5 ssh-ed25519 AAAA".into()),
+        reservation: None,
     }
 }
 
@@ -123,6 +125,7 @@ fn outcome() -> String {
         known_hosts: "203.0.113.5 ssh-ed25519 AAAA".into(),
         fingerprint: "SHA256:verified".into(),
         architecture: "amd64".into(),
+        allocation: None,
     })
     .unwrap()
 }

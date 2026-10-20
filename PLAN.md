@@ -30,6 +30,13 @@ pool selection, multiple entry points and per-port PROXY protocol.
 - Allow several Services to share an address on disjoint numeric ports. FRP's
   server allowlist is numeric, so cross-publication TCP/UDP reuse is excluded.
   Reserve SSH and tunnel control ports. Never steal existing allocations.
+- Allow independent clusters to register the same host. Each Machine UID owns
+  its enrollment, credentials, units and terminal revocation marker. Root SSH
+  administrators are mutually trusted.
+- Reserve public and control ports atomically on the host before applying a
+  publication. Host reservations survive tunnel outages and arbitrate across
+  cluster-local ledgers. Automatically choose an available control port in the
+  requested range, then commit it locally before starting the connector.
 - Persist allocation ownership with Service and Machine UIDs and optimistic
   concurrency. Service status is a projection, not the allocation database.
 - Several Machines provide independent addresses, not a floating IP or seamless
@@ -43,7 +50,9 @@ pool selection, multiple entry points and per-port PROXY protocol.
   FRP hot reload alone does not close all existing TCP connections.
 - Remove only owned remote files and units. Report pending remote cleanup and
   provide an explicit administrative abandonment action for unreachable hosts.
-  Keep the user's original authorized key.
+  Keep the user's original authorized key and other registrations' tunnels.
+  Retain shared immutable binaries and per-UID revocations after uninstall;
+  completed cleanup permits a new registration to reuse the released ports.
 - Pin component versions. Deliberate upgrades may interrupt connections;
   reconciliation of an unchanged configuration must not restart connectors.
 
@@ -93,6 +102,10 @@ pool selection, multiple entry points and per-port PROXY protocol.
 - Exercise the operator in a disposable local Kubernetes cluster: namespace
   authorization, Service status, backend churn, controller restart, remote
   outage/reconnection, collisions and deletion with active connections.
+- Exercise two independent clusters sharing one disposable host: concurrent
+  durable numeric claims, automatic control-port selection, cross-cluster
+  conflicts, cleanup isolation and reuse by a new Machine UID. Verify that
+  delayed reservation/apply operations cannot restore revoked generations.
 - Test network guards against API, node, LAN and unpublished destinations on the
   supported networking configuration. Report the actual scope of evidence;
   passing probes are not a proof against arbitrary software vulnerabilities.

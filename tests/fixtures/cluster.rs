@@ -107,18 +107,39 @@ pub(super) struct Environment {
 
 impl Environment {
     pub(super) fn load() -> Result<Self> {
+        Self::load_cluster("TUNNELLB_E2E_KUBECONFIG", "TUNNELLB_E2E_CLUSTER")
+    }
+
+    pub(super) fn load_second() -> Result<Self> {
+        ensure!(
+            env::var("TUNNELLB_E2E_SECOND_CLUSTER").is_ok(),
+            "explicit second disposable cluster required"
+        );
+        ensure!(
+            env::var("TUNNELLB_E2E_FIXTURE").is_ok(),
+            "explicit shared fixture ownership label required"
+        );
+
+        Self::load_cluster(
+            "TUNNELLB_E2E_SECOND_KUBECONFIG",
+            "TUNNELLB_E2E_SECOND_CLUSTER",
+        )
+    }
+
+    fn load_cluster(kubeconfig_variable: &str, cluster_variable: &str) -> Result<Self> {
         ensure!(
             enabled("TUNNELLB_E2E_ALLOW_DESTRUCTIVE"),
             "set TUNNELLB_E2E_ALLOW_DESTRUCTIVE=1 for the disposable local environment"
         );
         let kubeconfig = fs::canonicalize(
-            env::var("TUNNELLB_E2E_KUBECONFIG").context("explicit isolated kubeconfig required")?,
+            env::var(kubeconfig_variable).context("explicit isolated kubeconfig required")?,
         )?;
         ensure!(
             kubeconfig.starts_with("/tmp/codex/"),
             "kubeconfig must resolve under /tmp/codex"
         );
-        let cluster = env::var("TUNNELLB_E2E_CLUSTER").unwrap_or_else(|_| "tunnellb-e2e".into());
+        let cluster = env::var(cluster_variable).unwrap_or_else(|_| "tunnellb-e2e".into());
+        let fixture = env::var("TUNNELLB_E2E_FIXTURE").unwrap_or_else(|_| cluster.clone());
         ensure!(
             cluster.starts_with("tunnellb-e2e")
                 && cluster
@@ -131,7 +152,7 @@ impl Environment {
         let inspection: Value =
             serde_json::from_slice(&checked("docker", &["inspect", &edge], None, 15)?)?;
         ensure!(
-            inspection[0]["Config"]["Labels"]["tunnellb.io/e2e"] == cluster,
+            inspection[0]["Config"]["Labels"]["tunnellb.io/e2e"] == fixture,
             "edge container is not owned by this test environment"
         );
         ensure!(
@@ -163,7 +184,7 @@ impl Environment {
             15,
         )?)?;
         ensure!(
-            net[0]["Labels"]["tunnellb.io/e2e"] == cluster,
+            net[0]["Labels"]["tunnellb.io/e2e"] == fixture,
             "network ownership mismatch"
         );
         let address: Ipv4Addr = connection["IPAddress"]
@@ -216,6 +237,19 @@ impl Environment {
                     .is_some_and(|n| n.starts_with(&format!("k3d-{}-", result.cluster))),
                 "unexpected Kubernetes node"
             );
+            let conditions = node["status"]["conditions"]
+                .as_array()
+                .context("node conditions missing")?;
+            ensure!(
+                conditions
+                    .iter()
+                    .any(|condition| condition["type"] == "Ready" && condition["status"] == "True")
+                    && conditions
+                        .iter()
+                        .any(|condition| condition["type"] == "DiskPressure"
+                            && condition["status"] == "False"),
+                "disposable nodes must be Ready without DiskPressure"
+            );
             ensure!(
                 !node["status"]["addresses"]
                     .as_array()
@@ -232,6 +266,13 @@ impl Environment {
             None,
             15,
         )?)?;
+        ensure!(
+            server[0]["Config"]["Labels"]["tunnellb.io/e2e"] == fixture
+                && server[0]["NetworkSettings"]["Networks"]
+                    .get(network)
+                    .is_some(),
+            "cluster server must belong to this disposable fixture and network"
+        );
         ensure!(
             server[0]["Config"]["Cmd"]
                 .as_array()

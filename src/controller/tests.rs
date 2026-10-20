@@ -30,6 +30,8 @@ use crate::{
 const OPERATOR: &str = "operator";
 const TENANT: &str = "application";
 
+mod reservations;
+
 struct Exchange {
     method: &'static str,
     path: String,
@@ -181,7 +183,7 @@ fn record() -> PublicationRecord {
         },
         "backend_ports": [{"protocol": "TCP", "port": 8443}],
         "config_hash": "desired-hash", "applied_hash": "desired-hash",
-        "published": true, "removing": false,
+        "published": true, "removing": false, "reserved": true,
         "credential_generation": "a".repeat(64),
     }))
     .unwrap()

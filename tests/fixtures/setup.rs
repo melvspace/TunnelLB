@@ -1,10 +1,9 @@
 use crate::cluster::{BASE, Environment, checked, enabled};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
-use std::fs;
+use std::{env, fs};
 use tempfile::TempDir;
 
-pub(super) const IMAGE: &str = "tunnellb:0.1.0";
 pub(super) const BACKEND_IMAGE: &str = "tunnellb-e2e-backend:0.1.0";
 
 pub(super) struct Run {
@@ -13,6 +12,7 @@ pub(super) struct Run {
     pub(super) app: String,
     pub(super) operator: String,
     pub(super) machine: String,
+    image_tag: String,
     pub(super) installed: bool,
     resources_created: bool,
     pub(super) success: bool,
@@ -31,6 +31,7 @@ impl Run {
             app: format!("{name}-app"),
             operator: format!("{name}-system"),
             machine: format!("{name}-edge"),
+            image_tag: env::var("TUNNELLB_E2E_IMAGE_TAG").unwrap_or_else(|_| "0.1.0".into()),
             installed: false,
             resources_created: false,
             success: false,
@@ -98,8 +99,10 @@ impl Run {
                 "a fresh disposable edge is required; recreate it after a previous enrollment",
             )?;
 
+        let image = format!("tunnellb:{}", self.image_tag);
+
         if !enabled("TUNNELLB_E2E_SKIP_BUILD") {
-            checked("docker", &["build", "-t", IMAGE, "."], None, 1200)?;
+            checked("docker", &["build", "-t", &image, "."], None, 1200)?;
         }
 
         checked(
@@ -120,8 +123,10 @@ impl Run {
             &[
                 "image",
                 "import",
-                IMAGE,
+                &image,
                 BACKEND_IMAGE,
+                "--mode",
+                "direct",
                 "--cluster",
                 &self.env.cluster,
             ],
@@ -186,6 +191,8 @@ impl Run {
                 "allowPrivateMachines=true",
                 "--set",
                 "requeueSeconds=2",
+                "--set-string",
+                &format!("image.tag={}", self.image_tag),
                 "--wait",
                 "--timeout",
                 "120s",
@@ -193,6 +200,10 @@ impl Run {
             None,
             150,
         )?;
+        self.create_machine()
+    }
+
+    pub(super) fn create_machine(&self) -> Result<()> {
         self.env.apply(&json!({
             "apiVersion": "tunnellb.io/v1alpha1",
             "kind": "Machine",
@@ -207,8 +218,7 @@ impl Run {
                     "port": 22,
                     "privateKeySecretRef": {"name": "e2e-ssh"}
                 },
-                "allowedNamespaces": [self.app],
-                "controlPortRange": {"start": 20000, "end": 20100}
+                "allowedNamespaces": [self.app]
             }
         }))?;
 
@@ -233,6 +243,8 @@ impl Run {
                 "--namespace",
                 &self.operator,
                 "--create-namespace",
+                "--set-string",
+                &format!("image.tag={}", self.image_tag),
                 "--wait",
                 "--timeout",
                 "120s",

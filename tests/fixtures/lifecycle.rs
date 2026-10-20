@@ -223,11 +223,14 @@ impl Run {
         self.env
             .docker(&["test", "!", "-e", &format!("/var/lib/tunnellb/{uid}")])?;
         ensure!(
-            text(self.env.docker(&["cat", "/var/lib/tunnellb/uninstalled"])?)? == uid,
+            text(
+                self.env
+                    .docker(&["cat", &format!("/var/lib/tunnellb/retired/{uid}")])?
+            )? == uid,
             "terminal Machine tombstone was not retained"
         );
         self.env
-            .docker(&["test", "!", "-e", "/opt/tunnellb/0.71.1/frps"])?;
+            .docker(&["test", "-x", "/opt/tunnellb/0.71.1/frps"])?;
 
         ensure!(
             text(

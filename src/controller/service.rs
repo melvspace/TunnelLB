@@ -24,6 +24,7 @@ use super::{
         cleanup_publication, connector_matches, ensure_publication, publication_hash,
         publication_id, terminate_connector,
     },
+    reservation::ReservationConflict,
 };
 
 pub(super) async fn reconcile_service(
@@ -273,12 +274,14 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
             published: false,
             removing: false,
             credential_generation: None,
+            reserved: false,
         };
         context.store.save_record(&record).await?;
         records.push(record);
     }
 
     let mut ready = records.len() == requested;
+    let mut conflict = None;
     for record in &mut records {
         let machine = machines
             .iter()
@@ -299,7 +302,28 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
         }
 
         context.store.save_record(record).await?;
-        ready &= ensure_publication(record, machine, context).await?;
+        match ensure_publication(record, machine, context).await {
+            Ok(published) => ready &= published,
+            Err(error) => match error.downcast::<ReservationConflict>() {
+                Ok(reason) => {
+                    ready = false;
+                    conflict = Some(reason);
+                }
+                Err(error) => return Err(error),
+            },
+        }
+    }
+
+    if let Some(conflict) = conflict {
+        return service_condition(
+            service,
+            context,
+            false,
+            conflict.reason(),
+            &conflict.to_string(),
+            Some(published_ips(&records)),
+        )
+        .await;
     }
 
     let reason = if ready {

@@ -280,6 +280,7 @@ pub(super) fn request_for(
         server_certificate: None,
         server_private_key: None,
         generation: None,
+        reservation: None,
         expected_known_hosts: pin.map(|p| p.known_hosts.clone()),
     }
 }

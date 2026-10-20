@@ -65,6 +65,7 @@ fn assert_rejected(
     error
 }
 
+mod control;
 mod ownership;
 mod recovery;
 mod reservations;

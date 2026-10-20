@@ -133,6 +133,10 @@ fn remote_error(code: &str) -> &'static str {
             "host ownership marker is absent or belongs to another Machine UID; refusing takeover"
         }
 
+        "legacy-layout" => {
+            "legacy single-owner TunnelLB layout detected; uninstall with the old worker and explicitly reset its retained ownership markers before shared-host enrollment"
+        }
+
         "machine-revoked" => {
             "Machine UID was uninstalled; explicit administrator ownership reset is required before re-enrollment"
         }
@@ -149,6 +153,16 @@ fn remote_error(code: &str) -> &'static str {
             "publication generation ownership is missing or malformed; refusing ambiguous cleanup or replacement"
         }
 
+        "claim-state" => {
+            "host-wide port claim is missing or malformed; restore owned reservation state before retrying"
+        }
+
+        "reservation-required" => "publication must reserve host-wide ports before Apply",
+        "socket-state" => "host socket inspection returned malformed numeric listener state",
+        "reservation-conflict" => {
+            "publication reservation has different credentials or ports; remove it before reserving a replacement"
+        }
+
         "account-owner" => {
             "FRP system account conflicts with an existing account; refusing to reuse it"
         }
@@ -163,7 +177,7 @@ fn remote_error(code: &str) -> &'static str {
 
         "busy" => "another TunnelLB worker owns the remote provisioning lock; retry later",
         "checksum" => {
-            "remote FRP checksum does not match the pinned bundled binary; retry enrollment to repair it"
+            "remote FRP checksum does not match the immutable pinned binary; administrator repair is required"
         }
 
         "configuration" => {

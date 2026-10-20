@@ -22,6 +22,8 @@ base=/var/lib/tunnellb
 owned="$base/$owner"
 revocations="$owned/revocations"
 generations="$owned/generations"
+claims="$base/claims"
+retired="$base/retired/$owner"
 binbase=/opt/tunnellb
 binary="$binbase/{version}/frps"
 amd64_digest={amd64_digest}
@@ -41,13 +43,13 @@ claim_directory() {{
         plain_dir "$1"; marker "$1/owner" "$owner"
     else
         plain_dir "$(dirname "$1")"
-        claim=$(mktemp -d "$1.claim.XXXXXXXX")
+        claim=$(mktemp -d "$(dirname "$1")/.claim.XXXXXXXX")
         printf '%s\n' "$owner" > "$claim/owner"
         chmod 0755 "$claim"
         sync "$claim/owner" "$claim"
         mv -T -- "$claim" "$1"
-        sync "$(dirname "$1")"
     fi
+    sync "$1/owner" "$1" "$(dirname "$1")"
 }}
 persist_marker() {{
     if [ -e "$1" ] || [ -L "$1" ]; then
@@ -62,18 +64,53 @@ persist_marker() {{
     sync "$1" "$(dirname "$1")"
 }}
 lock() {{
-    if [ ! -e /run/tunnellb ] && [ ! -L /run/tunnellb ]; then mkdir -m 0700 /run/tunnellb; fi
+    reject_legacy
+    if [ ! -e /run/tunnellb ] && [ ! -L /run/tunnellb ]; then
+        mkdir -m 0700 /run/tunnellb 2>/dev/null || [ -d /run/tunnellb ] || fail unsafe-path
+    fi
     plain_dir /run/tunnellb
     [ ! -L /run/tunnellb/provision.lock ] || fail unsafe-path
+    if [ -e /run/tunnellb/provision.lock ]; then plain_file /run/tunnellb/provision.lock; fi
     exec 9>/run/tunnellb/provision.lock
     flock -w 15 9 || fail busy
+    reject_legacy
+}}
+reject_legacy() {{
+    for legacy in "$base/owner" "$binbase/owner"; do
+        [ ! -e "$legacy" ] && [ ! -L "$legacy" ] || fail legacy-layout
+    done
+}}
+shared_directory() {{
+    if [ -e "$1" ] || [ -L "$1" ]; then
+        plain_dir "$1"; marker "$1/schema" tunnellb-shared-v1
+    else
+        plain_dir "$(dirname "$1")"
+        shared_stage=$(mktemp -d "$1.pending.XXXXXXXX")
+        printf 'tunnellb-shared-v1\n' > "$shared_stage/schema"
+        chmod 0755 "$shared_stage"
+        sync "$shared_stage/schema" "$shared_stage"
+        mv -T -- "$shared_stage" "$1"
+    fi
+    sync "$1/schema" "$1" "$(dirname "$1")"
+}}
+ensure_directory() {{
+    if [ ! -e "$1" ] && [ ! -L "$1" ]; then mkdir -m 0700 "$1"; fi
+    plain_dir "$1"
+}}
+initialize_host() {{
+    shared_directory "$base"
+    ensure_directory "$claims"
+    ensure_directory "$base/retired"
+    sync "$base"
 }}
 check_global_owner() {{
-    plain_dir "$base"; marker "$base/owner" "$owner"
+    reject_legacy
+    plain_dir "$base"; marker "$base/schema" tunnellb-shared-v1
 }}
 check_not_uninstalled() {{
-    if [ -e "$base/uninstalled" ] || [ -L "$base/uninstalled" ]; then
-        marker "$base/uninstalled" "$owner"
+    plain_dir "$base/retired"
+    if [ -e "$retired" ] || [ -L "$retired" ]; then
+        marker "$retired" "$owner"
         fail machine-revoked
     fi
 }}
@@ -88,10 +125,13 @@ check_cleanup_owner() {{
     else
         # An interrupted recursive uninstall may already have removed the
         # inner owner file. Its durable terminal intent remains authoritative.
-        marker "$base/uninstalled" "$owner"
+        marker "$retired" "$owner"
     fi
 }}
-check_binary_owner() {{ plain_dir "$binbase"; marker "$binbase/owner" "$owner"; }}
+check_binary_owner() {{
+    plain_dir "$binbase"; marker "$binbase/schema" tunnellb-shared-v1
+    plain_dir "$(dirname "$binary")"
+}}
 check_template() {{
     plain_file "$unitfile"
     expected_unit_digest=$unit_digest
@@ -126,12 +166,11 @@ check_publication() {{
     plain_dir "$pub"
     if [ -e "$pub/owner" ] || [ -L "$pub/owner" ]; then
         marker "$pub/owner" "$owner:$publication"
-    elif [ -e "$base/uninstalled" ] || [ -L "$base/uninstalled" ]; then
-        marker "$base/uninstalled" "$owner"
+    elif [ -e "$retired" ] || [ -L "$retired" ]; then
+        marker "$retired" "$owner"
     else
         # The reservation outlives the payload, including partial rm -rf.
-        plain_dir "$generations"; marker "$generations/owner" "$owner"
-        read_generation_record "$generations/$publication"
+        read_claim "$claims/$owner/$publication.claim"
     fi
 }}
 read_current_generation() {{
@@ -143,14 +182,6 @@ read_current_generation() {{
             read_generation_record "$generations/$publication"
             return
         fi
-    fi
-    if [ -e "$pub" ] || [ -L "$pub" ]; then
-        # Adopt only a complete, previously owned publication from an older
-        # worker. Incomplete unidentified payload fails closed.
-        check_publication
-        plain_file "$pub/tls.crt"; plain_file "$pub/frps.toml"
-        current_generation=$(sha256sum "$pub/tls.crt" | cut -d' ' -f1)
-        current_configuration_hash=$(sha256sum "$pub/frps.toml" | cut -d' ' -f1)
     fi
 }}
 check_generation_not_revoked() {{
@@ -169,12 +200,20 @@ cleanup_publication() {{
     if [ -e "$unitfile" ] || [ -L "$unitfile" ]; then
         check_unit
         systemctl disable --now "$unit" >/dev/null 2>&1 || fail stop
+        if systemctl is-active --quiet "$unit"; then fail stop; fi
         systemctl reset-failed "$unit" >/dev/null 2>&1 || true
     elif [ -e "$pub" ]; then
         fail unit-owner
+    else
+        # A missing template/payload does not prove its loaded unit stopped.
+        [ "$(systemctl show "$unit" --property=MainPID --value)" = 0 ] || fail unit-owner
     fi
     if [ -e "$pub" ]; then
         rm -rf --one-file-system -- "$pub"
+    fi
+    if [ -e "$owned/publications" ] || [ -L "$owned/publications" ]; then
+        plain_dir "$owned/publications"
+        sync "$owned/publications"
     fi
 }}
 "#,
@@ -184,7 +223,7 @@ cleanup_publication() {{
         amd64_digest = AMD64_SHA256,
         arm64_digest = ARM64_SHA256,
         unit_digest = digest(systemd_unit(&request.machine_uid).as_bytes())
-    )
+    ) + super::reservation::CLAIM_FUNCTIONS
 }
 
 pub(super) fn systemd_unit(uid: &str) -> String {

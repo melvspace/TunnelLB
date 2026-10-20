@@ -21,6 +21,13 @@ fn validate_component(value: &str, name: &str) -> Result<()> {
 
 pub(super) fn validate_request(request: &Request) -> Result<()> {
     validate_component(&request.machine_uid, "Machine UID")?;
+    ensure!(
+        !matches!(
+            request.machine_uid.as_str(),
+            "claims" | "retired" | "schema" | "owner" | "uninstalled"
+        ),
+        "Machine UID conflicts with a reserved host state directory"
+    );
     ensure!(request.ssh_port != 0, "SSH port must be nonzero");
     ensure!(
         !request.address.is_unspecified()
@@ -47,11 +54,14 @@ pub(super) fn validate_request(request: &Request) -> Result<()> {
         parse_pin(pin, request.address, request.ssh_port)?;
     }
 
-    if matches!(request.operation, Operation::Apply | Operation::Remove) {
+    if matches!(
+        request.operation,
+        Operation::Reserve | Operation::Apply | Operation::Remove
+    ) {
         let publication = request
             .publication
             .as_ref()
-            .context("publication is required for apply/remove")?;
+            .context("publication is required for reserve/apply/remove")?;
         validate_component(&publication.id, "publication ID")?;
         ensure!(
             publication.machine_uid == request.machine_uid,
@@ -60,7 +70,7 @@ pub(super) fn validate_request(request: &Request) -> Result<()> {
         let generation = request
             .generation
             .as_deref()
-            .context("credential generation is required for apply/remove")?;
+            .context("credential generation is required for reserve/apply/remove")?;
         ensure!(
             generation.len() == 64
                 && generation
@@ -71,19 +81,48 @@ pub(super) fn validate_request(request: &Request) -> Result<()> {
 
         // Remove deliberately does not validate the old Service's current ports,
         // backend, address, or credentials. Only its ownership identity matters.
-        if request.operation == Operation::Apply {
+        if matches!(request.operation, Operation::Reserve | Operation::Apply) {
             ensure!(
                 publication.machine_address == request.address,
                 "publication address does not match the SSH target"
             );
+            ensure!(
+                publication
+                    .service
+                    .ports
+                    .iter()
+                    .all(|p| p.port != request.ssh_port),
+                "publication cannot occupy the reserved SSH port"
+            );
+            ensure!(
+                !publication.service.ports.is_empty()
+                    && publication.service.ports.iter().all(|p| p.port != 0),
+                "publication requires nonzero public ports"
+            );
+        }
+
+        if request.operation == Operation::Reserve {
+            let reservation = request
+                .reservation
+                .as_ref()
+                .context("reservation is required")?;
+            ensure!(
+                reservation.control_port_range.start != 0
+                    && reservation.control_port_range.start <= reservation.control_port_range.end
+                    && reservation.excluded_ports.iter().all(|port| *port != 0),
+                "reservation requires a nonzero ordered control range and nonzero exclusions"
+            );
+        }
+
+        if request.operation == Operation::Apply {
             ensure!(
                 publication.control_port != request.ssh_port
                     && publication
                         .service
                         .ports
                         .iter()
-                        .all(|p| p.port != request.ssh_port),
-                "publication cannot occupy the reserved SSH port"
+                        .all(|p| p.port != publication.control_port),
+                "control port cannot overlap SSH or any numeric public port"
             );
             let config = required_field(&request.server_config, "server configuration")?;
             let cert = required_field(&request.server_certificate, "server certificate")?;
@@ -156,6 +195,7 @@ mod tests {
             known_hosts: request.expected_known_hosts.unwrap(),
             fingerprint: "SHA256:test".into(),
             architecture: "amd64".into(),
+            allocation: None,
         };
 
         let serialized = serde_json::to_string(&outcome).unwrap();
@@ -204,7 +244,12 @@ mod tests {
         request.expected_known_hosts = None;
         validate_request(&request).unwrap();
 
-        for operation in [Operation::Apply, Operation::Remove, Operation::Uninstall] {
+        for operation in [
+            Operation::Reserve,
+            Operation::Apply,
+            Operation::Remove,
+            Operation::Uninstall,
+        ] {
             request.operation = operation;
             assert!(validate_request(&request).is_err());
         }
@@ -246,6 +291,47 @@ mod tests {
     }
 
     #[test]
+    fn reserve_needs_identity_and_numeric_ports_but_no_payload() {
+        let mut valid = request(Operation::Reserve);
+        valid.server_config = None;
+        valid.server_certificate = None;
+        valid.server_private_key = None;
+        valid.publication.as_mut().unwrap().control_port = 0;
+        validate_request(&valid).unwrap();
+        let mut invalid = valid.clone();
+        invalid.reservation = None;
+        assert!(validate_request(&invalid).is_err());
+        invalid = valid.clone();
+        invalid.publication.as_mut().unwrap().service.ports.clear();
+        assert!(validate_request(&invalid).is_err());
+
+        for port in [0, valid.ssh_port] {
+            invalid = valid.clone();
+            invalid.publication.as_mut().unwrap().service.ports[0].port = port;
+            assert!(validate_request(&invalid).is_err());
+        }
+
+        for range in [
+            crate::api::PortRange { start: 0, end: 10 },
+            crate::api::PortRange { start: 11, end: 10 },
+        ] {
+            invalid = valid.clone();
+            invalid.reservation.as_mut().unwrap().control_port_range = range;
+            assert!(validate_request(&invalid).is_err());
+        }
+
+        invalid = valid;
+        invalid.reservation.as_mut().unwrap().excluded_ports.push(0);
+        assert!(validate_request(&invalid).is_err());
+
+        for owner in ["schema", "claims", "retired", "owner", "uninstalled"] {
+            let mut invalid = request(Operation::Enroll);
+            invalid.machine_uid = owner.into();
+            assert!(validate_request(&invalid).is_err());
+        }
+    }
+
+    #[test]
     fn missing_malformed_or_mismatched_generation_is_rejected_before_execution() {
         let valid = request(Operation::Apply);
 
@@ -257,7 +343,7 @@ mod tests {
             Some("g".repeat(64)),
             Some("../other".into()),
         ] {
-            for operation in [Operation::Apply, Operation::Remove] {
+            for operation in [Operation::Reserve, Operation::Apply, Operation::Remove] {
                 let mut candidate = valid.clone();
                 candidate.operation = operation;
                 candidate.generation = generation.clone();

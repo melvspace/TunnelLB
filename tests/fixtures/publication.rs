@@ -12,6 +12,10 @@ use std::{
 
 impl Run {
     pub(super) fn backend(&self) -> Result<()> {
+        self.backend_on(18080, 18081)
+    }
+
+    pub(super) fn backend_on(&self, tcp: u16, udp: u16) -> Result<()> {
         self.env.apply(&json!({
             "apiVersion": "apps/v1",
             "kind": "Deployment",
@@ -116,7 +120,7 @@ impl Run {
             "--timeout=120s",
         ])?;
 
-        self.env.apply(&self.service("echo", 18080, 18081, false))?;
+        self.env.apply(&self.service("echo", tcp, udp, false))?;
         self.published("echo")
     }
 
@@ -161,7 +165,16 @@ impl Run {
     }
 
     pub(super) fn published(&self, name: &str) -> Result<()> {
+        self.published_while(name, || Ok(()))
+    }
+
+    pub(super) fn published_while(
+        &self,
+        name: &str,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
         wait_for("Service publication", 180, || {
+            check()?;
             let service = self.get(&self.app, "service", name)?;
 
             Ok(service["status"]["conditions"]
@@ -214,8 +227,15 @@ impl Run {
         let mut connection = connect(self.env.address, tcp)?;
         let local = connection.local_addr()?;
         let reply = exchange(&mut connection, "tunnellb-tcp")?;
+        let backends = self.list(&self.app, "pods", "app=e2e-backend")?;
 
         ensure!(reply["payload"] == "tunnellb-tcp", "TCP payload changed");
+        ensure!(
+            backends
+                .iter()
+                .any(|pod| pod["metadata"]["name"] == reply["backend"]),
+            "TCP reached a backend outside the expected cluster and namespace"
+        );
         ensure!(
             reply["proxy_version"] == if proxy { json!(2) } else { Value::Null },
             "unexpected PROXY framing"
@@ -238,6 +258,12 @@ impl Run {
         let len = socket.recv(&mut bytes)?;
         let response: Value = serde_json::from_slice(&bytes[..len])?;
         ensure!(response["payload"] == "tunnellb-udp", "UDP payload changed");
+        ensure!(
+            backends
+                .iter()
+                .any(|pod| pod["metadata"]["name"] == response["backend"]),
+            "UDP reached a backend outside the expected cluster and namespace"
+        );
 
         Ok(())
     }

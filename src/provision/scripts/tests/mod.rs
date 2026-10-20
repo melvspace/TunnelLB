@@ -5,6 +5,7 @@ use crate::provision::{Operation, binary::AMD64_SHA256, test_support::request};
 
 mod host;
 mod lifecycle;
+mod reservation;
 use host::TestHost;
 
 #[test]
@@ -25,6 +26,7 @@ fn generated_scripts_are_valid_bash_and_secrets_are_encoded() {
         probe_script(&request),
         enroll_script(&request, Some(b"fake binary"), AMD64_SHA256).unwrap(),
         enroll_script(&request, None, AMD64_SHA256).unwrap(),
+        reserve_script(&request).unwrap(),
         apply_script(&request).unwrap(),
         remove_script(&request).unwrap(),
         uninstall_script(&request).unwrap(),
@@ -58,9 +60,19 @@ fn port_conflicts_reject_other_processes_and_accept_only_owned_listeners() {
     let request = request(Operation::Apply);
     let host = TestHost::new();
     host.enroll(&request);
+    host.reserve(&request);
     host.success(apply_script(&request).unwrap());
+    let pid = std::fs::read_to_string(host.active(&request)).unwrap();
+    let pid = pid.trim();
 
-    for endpoint in ["tcp-22000", "tcp-443", "udp-53"] {
+    for endpoint in [
+        "tcp-22000",
+        "udp-22000",
+        "tcp-443",
+        "udp-443",
+        "tcp-53",
+        "udp-53",
+    ] {
         for (sockets, permitted) in [
             ("", true),
             (
@@ -77,7 +89,11 @@ fn port_conflicts_reject_other_processes_and_accept_only_owned_listeners() {
             ),
             ("LISTEN 0 100 0.0.0.0:443 *:*", false),
         ] {
-            std::fs::write(host.path(&format!("sockets-{endpoint}")), sockets).unwrap();
+            std::fs::write(
+                host.path(&format!("sockets-{endpoint}")),
+                sockets.replace("pid=123", &format!("pid={pid}")),
+            )
+            .unwrap();
 
             if permitted {
                 host.success(apply_script(&request).unwrap());

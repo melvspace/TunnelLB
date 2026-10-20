@@ -1,21 +1,17 @@
 //! Immutable publication installation and generation-specific revocation.
-use std::collections::BTreeSet;
-
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
 use super::{
     digest,
     host::{prelude, systemd_unit},
+    reservation::public_ports,
     shell_quote, upload,
 };
 
-use crate::{
-    api::Protocol,
-    provision::{Request, request::required_field},
-};
+use crate::provision::{Request, request::required_field};
 
-fn publication_vars(request: &Request) -> Result<String> {
+pub(super) fn publication_vars(request: &Request) -> Result<String> {
     let publication = request
         .publication
         .as_ref()
@@ -43,8 +39,10 @@ pub(in crate::provision) fn apply_script(request: &Request) -> Result<String> {
     let mut script = prelude(request);
     script.push_str(&publication_vars(request)?);
     script.push_str(&format!(
-        "configuration_hash={}\n",
-        shell_quote(&digest(config.as_bytes()))
+        "configuration_hash={}\npublic_ports={}\ncontrol_port={}\n",
+        shell_quote(&digest(config.as_bytes())),
+        shell_quote(&public_ports(request)?),
+        publication.control_port,
     ));
     script.push_str(
         r#"
@@ -52,6 +50,9 @@ lock
 check_global_owner; check_not_uninstalled
 check_generation_not_revoked
 check_owner; check_binary_owner; check_template
+read_own_claim
+[ -n "$claim_generation" ] || fail reservation-required
+[ "$claim_generation" = "$generation" ] && [ "$claim_control" = "$control_port" ] && [ "$claim_public" = "$public_ports" ] || fail reservation-conflict
 read_current_generation
 [ -z "$current_generation" ] || [ "$current_generation" = "$generation" ] || fail generation-conflict
 [ -z "$current_configuration_hash" ] || [ "$current_configuration_hash" = "$configuration_hash" ] || fail generation-conflict
@@ -63,7 +64,10 @@ case "$(uname -m)" in
     *) fail architecture ;;
 esac
 [ "$(sha256sum "$binary" | cut -d' ' -f1)" = "$expected_binary" ] || fail checksum
-if [ -e "$pub" ] || [ -L "$pub" ]; then check_publication; fi
+if [ -e "$pub" ] || [ -L "$pub" ]; then
+    [ -n "$current_generation" ] || fail generation-state
+    check_publication
+fi
 stage=$(mktemp -d "$owned/.apply.XXXXXXXX")
 trap 'rm -rf --one-file-system -- "$stage"' EXIT
 "#,
@@ -104,21 +108,13 @@ check_port() {
     done <<< "$sockets"
 }
 "#);
-    let mut ports = BTreeSet::new();
-    ports.insert((Protocol::Tcp, publication.control_port));
-
-    for port in &publication.service.ports {
-        ports.insert((port.protocol, port.port));
-    }
-
-    for (protocol, port) in ports {
-        script.push_str(&format!("check_port {} {}\n", protocol.frp_name(), port));
-    }
-
     script.push_str(r#"
-# Reserve the immutable generation and configuration before creating any
-# payload or enabling its unit. The reservation survives failed Apply and
-# partial recursive cleanup, and only a completed matching Remove releases it.
+for number in $public_ports "$control_port"; do
+    check_port tcp "$number"
+    check_port udp "$number"
+done
+# Bind the immutable configuration to the existing reservation before payload
+# creation. Only a completed matching Remove releases the host-wide claim.
 claim_directory "$generations"
 chmod 0700 "$generations"
 persist_marker "$generations/$publication" "$generation:$configuration_hash"
@@ -167,13 +163,14 @@ pub(in crate::provision) fn remove_script(request: &Request) -> Result<String> {
     script.push_str(
         r#"
 lock
-claim_directory "$base"
-if [ -e "$base/uninstalled" ] || [ -L "$base/uninstalled" ]; then
-    marker "$base/uninstalled" "$owner"
+initialize_host
+if [ -e "$retired" ] || [ -L "$retired" ]; then
+    persist_marker "$retired" "$owner"
     if [ -e "$owned" ] || [ -L "$owned" ]; then check_cleanup_owner; fi
     # Terminal Machine revocation already fences every generation, but a
     # previous Uninstall may have failed before stopping this publication.
     cleanup_publication
+    release_claim
     printf 'TUNNELLB_OK\n'; exit 0
 fi
 # Remove must also fence an Apply that has not installed anything yet.
@@ -181,22 +178,34 @@ claim_directory "$owned"
 claim_directory "$revocations"
 chmod 0700 "$revocations"
 persist_marker "$revocations/$publication-$generation" "$owner:$publication:$generation"
+read_own_claim
 read_current_generation
+[ -z "$current_generation" ] || [ "$current_generation" = "$claim_generation" ] || fail claim-state
+if [ -n "$claim_generation" ] && [ "$claim_generation" != "$generation" ]; then
+    printf 'TUNNELLB_OK\n'; exit 0
+fi
 if [ -n "$current_generation" ] && [ "$current_generation" != "$generation" ]; then
     # An old Remove may arrive after replacement. It revokes only the old
     # generation and must leave the new unit and payload untouched.
     printf 'TUNNELLB_OK\n'; exit 0
 fi
-if [ -z "$current_generation" ] && { [ -e "$unitfile" ] || [ -L "$unitfile" ]; }; then
+if [ -z "$claim_generation" ] && { [ -e "$unitfile" ] || [ -L "$unitfile" ]; }; then
     check_unit
     if systemctl is-active --quiet "$unit"; then fail generation-state; fi
+fi
+if [ -z "$claim_generation" ] && { [ -n "$current_generation" ] || [ -e "$pub" ] || [ -L "$pub" ]; }; then
+    fail claim-state
 fi
 cleanup_publication
 if [ -e "$generations/$publication" ] || [ -L "$generations/$publication" ]; then
     plain_file "$generations/$publication"
     rm -f -- "$generations/$publication"
+fi
+if [ -e "$generations" ] || [ -L "$generations" ]; then
+    plain_dir "$generations"; marker "$generations/owner" "$owner"
     sync "$generations"
 fi
+release_claim
 printf 'TUNNELLB_OK\n'
 "#,
     );

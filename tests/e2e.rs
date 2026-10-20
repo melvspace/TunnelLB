@@ -3,6 +3,11 @@
 //! TUNNELLB_E2E_SKIP_BUILD=1 uses an existing operator image. Resources created
 //! by the test are cleaned on exit; TUNNELLB_E2E_KEEP_ON_FAILURE=1 retains failed
 //! runs for diagnosis. The prepared cluster and edge remain available afterward.
+//! Set TUNNELLB_E2E_IMAGE_TAG to use another local tunnellb image tag.
+//! Setting TUNNELLB_E2E_SECOND_KUBECONFIG selects the shared-host scenario, requiring
+//! TUNNELLB_E2E_SECOND_CLUSTER and TUNNELLB_E2E_FIXTURE (the common Docker label).
+//! Run either mode with:
+//! cargo test --test e2e real_cluster_lifecycle -- --ignored --nocapture
 use anyhow::Result;
 
 #[path = "fixtures/cluster.rs"]
@@ -17,6 +22,8 @@ mod lifecycle;
 mod publication;
 #[path = "fixtures/setup.rs"]
 mod setup;
+#[path = "fixtures/shared.rs"]
+mod shared;
 
 use cluster::Environment;
 use setup::Run;
@@ -24,6 +31,10 @@ use setup::Run;
 #[test]
 #[ignore = "requires explicit destructive consent and a prepared disposable k3d/systemd environment"]
 fn real_cluster_lifecycle() -> Result<()> {
+    if std::env::var_os("TUNNELLB_E2E_SECOND_KUBECONFIG").is_some() {
+        return shared::run();
+    }
+
     let mut run = Run::new(Environment::load()?)?;
     run.setup()?;
     run.enrollment()?;

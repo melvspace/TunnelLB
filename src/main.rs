@@ -220,6 +220,7 @@ mod tests {
             known_hosts,
             fingerprint: "SHA256:example".into(),
             architecture: "amd64".into(),
+            allocation: None,
         }
     }
 
@@ -305,13 +306,30 @@ mod tests {
 
     #[test]
     fn outcome_limit_counts_serialized_bytes_including_escaping() {
-        let overhead = encode_outcome(&outcome(String::new())).unwrap().len();
-        let exact = outcome("a".repeat(MAX_RESULT_BYTES - overhead));
-        assert_eq!(encode_outcome(&exact).unwrap().len(), MAX_RESULT_BYTES);
-        let too_large = outcome("a".repeat(MAX_RESULT_BYTES - overhead + 1));
-        assert!(encode_outcome(&too_large).is_err());
-        assert!(encode_outcome(&outcome("\n".repeat(MAX_RESULT_BYTES / 2))).is_err());
-        assert!(encode_outcome(&outcome("é".repeat(MAX_RESULT_BYTES / 2))).is_err());
+        for allocation in [
+            None,
+            Some(provision::AllocationOutcome::Reserved {
+                control_port: u16::MAX,
+            }),
+            Some(provision::AllocationOutcome::PortConflict { port: u16::MAX }),
+            Some(provision::AllocationOutcome::ControlRangeExhausted),
+            Some(provision::AllocationOutcome::ReservationChanged),
+        ] {
+            let mut result = outcome(String::new());
+            result.allocation = allocation;
+            let overhead = encode_outcome(&result).unwrap().len();
+
+            result.known_hosts = "a".repeat(MAX_RESULT_BYTES - overhead);
+            assert_eq!(encode_outcome(&result).unwrap().len(), MAX_RESULT_BYTES);
+            result.known_hosts.push('a');
+            let error = encode_outcome(&result).unwrap_err();
+            assert_eq!(format!("{error:#}"), WORKER_FAILURE);
+
+            for value in ["\n", "é"] {
+                result.known_hosts = value.repeat(MAX_RESULT_BYTES / 2);
+                assert!(encode_outcome(&result).is_err());
+            }
+        }
     }
 
     #[tokio::test]

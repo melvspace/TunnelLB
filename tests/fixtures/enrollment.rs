@@ -63,7 +63,7 @@ impl Run {
                 .as_str()
                 .context("enrollment Job has no name")?;
             let (request, outcome) = self
-                .enrollment_result(job)
+                .worker_result(job)
                 .with_context(|| format!("checking enrollment Job {name}"))?;
             ensure!(
                 request["operation"] == "enroll",
@@ -103,7 +103,7 @@ impl Run {
         Ok(())
     }
 
-    fn enrollment_result(&self, job: &Value) -> Result<(Value, Outcome)> {
+    pub(super) fn worker_result(&self, job: &Value) -> Result<(Value, Outcome)> {
         let name = job["metadata"]["name"]
             .as_str()
             .context("Job name missing")?;
@@ -115,7 +115,7 @@ impl Run {
                     .iter()
                     .any(|condition| condition["type"] == "Complete"
                         && condition["status"] == "True")),
-            "enrollment Job has not completed"
+            "SSH Job has not completed"
         );
         let secret_name = request_secret(&job["spec"]["template"]["spec"])?;
         let secret = self.get(&self.operator, "secret", secret_name)?;
@@ -150,7 +150,7 @@ impl Run {
             .collect();
         ensure!(
             successful_pods.len() == 1,
-            "enrollment Job must own exactly one successful Pod"
+            "SSH Job must own exactly one successful Pod"
         );
         let pod = successful_pods[0];
         ensure!(

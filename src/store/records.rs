@@ -22,6 +22,8 @@ pub struct PublicationRecord {
     pub applied_hash: Option<String>,
     pub published: bool,
     #[serde(default)]
+    pub reserved: bool,
+    #[serde(default)]
     pub removing: bool,
     #[serde(default)]
     pub credential_generation: Option<String>,

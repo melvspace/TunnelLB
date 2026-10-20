@@ -154,6 +154,7 @@ fn record() -> PublicationRecord {
         config_hash: "desired-hash".into(),
         applied_hash: None,
         published: false,
+        reserved: false,
         removing: false,
         credential_generation: None,
     }
@@ -250,6 +251,7 @@ fn pin_object() -> Secret {
 }
 
 mod cleanup;
+mod control;
 mod identities;
 mod leases;
 mod records;

@@ -41,18 +41,22 @@ async fn unpublished_recovery_replaces_an_orphan_reservation_in_one_write() {
 fn cleanup_state_defaults_for_old_records_and_survives_serialization() {
     let mut value = serde_json::to_value(record()).unwrap();
     value.as_object_mut().unwrap().remove("removing");
+    value.as_object_mut().unwrap().remove("reserved");
     value
         .as_object_mut()
         .unwrap()
         .remove("credential_generation");
     let mut restored: PublicationRecord = serde_json::from_value(value).unwrap();
     assert!(!restored.removing);
+    assert!(!restored.reserved);
     assert!(restored.credential_generation.is_none());
     restored.removing = true;
+    restored.reserved = true;
     restored.credential_generation = Some("certificate-sha256".into());
     let reloaded: PublicationRecord =
         serde_json::from_str(&serde_json::to_string(&restored).unwrap()).unwrap();
     assert!(reloaded.removing);
+    assert!(reloaded.reserved);
     assert_eq!(
         reloaded.credential_generation.as_deref(),
         Some("certificate-sha256")

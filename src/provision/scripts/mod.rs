@@ -5,11 +5,13 @@ use sha2::{Digest, Sha256};
 mod host;
 mod machine;
 mod publication;
+mod reservation;
 #[cfg(test)]
 mod tests;
 
 pub(super) use machine::{enroll_script, probe_script, uninstall_script};
 pub(super) use publication::{apply_script, remove_script};
+pub(super) use reservation::{parse_allocation, reserve_script};
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))

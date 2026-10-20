@@ -10,7 +10,7 @@ use super::{
 };
 use crate::{
     allocation::Ledger,
-    api::{Machine, ServiceRequest},
+    api::{Machine, Publication, ServiceRequest},
 };
 
 impl Store {
@@ -33,6 +33,42 @@ impl Store {
         id: &str,
     ) -> Result<u16> {
         self.allocate_lease(machine, request, id, true).await
+    }
+
+    /// Read local exclusions without reserving a second control port. The host
+    /// arbitrates these numbers against reservations from other controllers.
+    pub async fn control_exclusions(
+        &self,
+        machine: &Machine,
+        publication: &Publication,
+    ) -> Result<Vec<u16>> {
+        validate_id(&publication.id)?;
+        let labels = machine_labels("allocation", &publication.machine_uid)?;
+        let name = machine_state_name("ports", &publication.machine_uid);
+        let object = self
+            .config_maps()
+            .get_opt(&name)
+            .await?
+            .context("publication allocation ledger is missing")?;
+        self.check_owned(&object.metadata, &name, &labels)?;
+        resource_version(&object.metadata)?;
+        read_ledger(&object)?.control_exclusions(machine, publication)
+    }
+
+    /// Persist a host-selected control using the publication's previous control
+    /// as a precondition. A successful earlier confirmation is an idempotent retry.
+    pub async fn confirm_control(
+        &self,
+        machine: &Machine,
+        publication: &Publication,
+        control_port: u16,
+    ) -> Result<()> {
+        validate_id(&publication.id)?;
+        self.edit_ledger(&publication.machine_uid, false, None, |ledger| {
+            ledger.confirm_control(machine, publication, control_port)
+        })
+        .await?
+        .context("publication allocation ledger is missing")
     }
 
     async fn allocate_lease(

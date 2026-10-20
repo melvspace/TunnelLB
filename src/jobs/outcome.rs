@@ -103,11 +103,12 @@ pub(super) fn result(request: &provision::Request, job: &Job, pods: &[Pod]) -> S
             };
 
             // Reject error envelopes even if Outcome later gains serde defaults.
-            if !serde_json::from_str::<Value>(message)
-                .is_ok_and(|v| v.is_object() && v.get("error").is_none())
-            {
-                return State::Failed("completed SSH Job has an invalid worker result".into());
-            }
+            let value = match serde_json::from_str::<Value>(message) {
+                Ok(value) if value.is_object() && value.get("error").is_none() => value,
+                _ => {
+                    return State::Failed("completed SSH Job has an invalid worker result".into());
+                }
+            };
 
             match serde_json::from_str::<provision::Outcome>(message) {
                 Ok(outcome)
@@ -116,7 +117,12 @@ pub(super) fn result(request: &provision::Request, job: &Job, pods: &[Pod]) -> S
                             .fingerprint
                             .strip_prefix("SHA256:")
                             .is_some_and(|hash| !hash.is_empty())
-                        && valid_architecture(request, &outcome.architecture) =>
+                        && valid_architecture(request, &outcome.architecture)
+                        && valid_allocation(
+                            request,
+                            outcome.allocation.as_ref(),
+                            value.get("allocation"),
+                        ) =>
                 {
                     State::Complete(outcome)
                 }
@@ -134,6 +140,55 @@ fn valid_architecture(request: &provision::Request, architecture: &str) -> bool 
         architecture.is_empty()
     } else {
         matches!(architecture, "amd64" | "arm64")
+    }
+}
+
+fn valid_allocation(
+    request: &provision::Request,
+    allocation: Option<&provision::AllocationOutcome>,
+    serialized_allocation: Option<&Value>,
+) -> bool {
+    use provision::{AllocationOutcome, Operation};
+
+    if request.operation != Operation::Reserve {
+        return allocation.is_none();
+    }
+
+    match allocation {
+        Some(AllocationOutcome::Reserved { control_port }) => {
+            *control_port != 0
+                && *control_port != request.ssh_port
+                && request.reservation.as_ref().is_some_and(|reservation| {
+                    let range = reservation.control_port_range;
+                    (range.start..=range.end).contains(control_port)
+                        && !reservation.excluded_ports.contains(control_port)
+                })
+                && request.publication.as_ref().is_some_and(|publication| {
+                    publication
+                        .service
+                        .ports
+                        .iter()
+                        .all(|port| port.port != *control_port)
+                })
+        }
+
+        Some(AllocationOutcome::PortConflict { port }) => {
+            request.publication.as_ref().is_some_and(|publication| {
+                publication
+                    .service
+                    .ports
+                    .iter()
+                    .any(|public| public.port == *port)
+            })
+        }
+
+        Some(AllocationOutcome::ControlRangeExhausted | AllocationOutcome::ReservationChanged) => {
+            // Serde ignores extra fields on internally tagged unit variants.
+            serialized_allocation
+                .and_then(Value::as_object)
+                .is_some_and(|fields| fields.len() == 1)
+        }
+        None => false,
     }
 }
 

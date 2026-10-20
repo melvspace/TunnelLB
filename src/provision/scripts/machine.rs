@@ -11,6 +11,7 @@ use crate::provision::{Operation, Request};
 pub(in crate::provision) fn probe_script(request: &Request) -> String {
     let mut script = prelude(request);
     script.push_str(r#"
+reject_legacy
 [ "$(id -u)" = 0 ] || fail sudo
 [ -r /etc/os-release ] || fail platform
 . /etc/os-release
@@ -46,8 +47,9 @@ for name in k3s.service k3s-agent.service tailscaled.service; do
     if systemctl cat "$name" >/dev/null 2>&1; then fail dedicated-host; fi
 done
 if [ -e "$binbase" ] || [ -L "$binbase" ]; then
-    check_binary_owner
+    plain_dir "$binbase"; marker "$binbase/schema" tunnellb-shared-v1
     if [ -e "$binary" ] || [ -L "$binary" ]; then
+        check_binary_owner
         plain_file "$binary"
         printf 'TUNNELLB_BINARY %s\n' "$(sha256sum "$binary" | cut -d' ' -f1)"
     fi
@@ -69,10 +71,10 @@ pub(in crate::provision) fn enroll_script(
     let mut script = prelude(request);
     script.push_str(r#"
 lock
-claim_directory "$base"
+initialize_host
 check_not_uninstalled
 claim_directory "$owned"
-claim_directory "$binbase"
+shared_directory "$binbase"
 chmod 0755 "$base" "$owned" "$binbase"
 if getent passwd "$account" >/dev/null; then
     [ "$(getent passwd "$account" | cut -d: -f5)" = "TunnelLB-$owner" ] && [ "$(id -u "$account")" != 0 ] || fail account-owner
@@ -98,18 +100,20 @@ trap 'rm -rf --one-file-system -- "$stage"' EXIT
         script.push_str(
             r#"
 [ "$(sha256sum "$stage/frps" | cut -d' ' -f1)" = "$expected_digest" ] || fail checksum
-if [ -e "$binary" ] || [ -L "$binary" ]; then plain_file "$binary"; fi
-if [ ! -f "$binary" ] || [ "$(sha256sum "$binary" | cut -d' ' -f1)" != "$expected_digest" ]; then
+if [ -e "$binary" ] || [ -L "$binary" ]; then
+    plain_file "$binary"
+    [ "$(sha256sum "$binary" | cut -d' ' -f1)" = "$expected_digest" ] || fail checksum
+else
     install -o root -g root -m 0755 "$stage/frps" "$(dirname "$binary")/.frps.new"
-    mv -fT "$(dirname "$binary")/.frps.new" "$binary"
+    sync "$(dirname "$binary")/.frps.new"
+    mv -T "$(dirname "$binary")/.frps.new" "$binary"
+    sync "$binary" "$(dirname "$binary")"
 fi
 "#,
         );
     } else {
         script.push_str("plain_file \"$binary\"\n[ \"$(sha256sum \"$binary\" | cut -d' ' -f1)\" = \"$expected_digest\" ] || fail checksum\n");
     }
-
-    script.push_str("chown root:root \"$binary\"\nchmod 0755 \"$binary\"\n");
 
     upload(
         &mut script,
@@ -142,14 +146,14 @@ pub(in crate::provision) fn uninstall_script(request: &Request) -> Result<String
     script.push_str(
         r#"
 lock
-claim_directory "$base"
-if [ -e "$base/uninstalled" ] || [ -L "$base/uninstalled" ]; then
-    marker "$base/uninstalled" "$owner"
+initialize_host
+if [ -e "$retired" ] || [ -L "$retired" ]; then
+    persist_marker "$retired" "$owner"
 else
     if [ -e "$owned" ] || [ -L "$owned" ]; then check_owner; fi
     # Persist terminal intent even on an empty host. A delayed first Enroll
     # must not install anything after this Uninstall has completed.
-    persist_marker "$base/uninstalled" "$owner"
+    persist_marker "$retired" "$owner"
 fi
 if [ -e "$owned" ] || [ -L "$owned" ]; then check_cleanup_owner; fi
 if [ -e "$owned/publications" ] || [ -L "$owned/publications" ]; then
@@ -176,21 +180,34 @@ if [ -e "$unitfile" ] || [ -L "$unitfile" ]; then
         pub="$owned/publications/$publication"
         cleanup_publication
     done <<< "$instances"
+fi
+if [ -e "$claims/$owner" ] || [ -L "$claims/$owner" ]; then
+    plain_dir "$claims/$owner"; marker "$claims/$owner/owner" "$owner"
+    for record in "$claims/$owner/"*.claim; do
+        [ -e "$record" ] || [ -L "$record" ] || continue
+        read_claim "$record"
+        publication=$claim_publication
+        pub="$owned/publications/$publication"
+        unit="tunnellb-$owner@$publication.service"
+        cleanup_publication
+        release_claim
+    done
+    sync "$claims/$owner"
+fi
+sync "$claims"
+if [ -e "$unitfile" ] || [ -L "$unitfile" ]; then
+    check_template
     rm -f -- "$unitfile"
     systemctl daemon-reload
 fi
-if [ -e "$binbase" ] || [ -L "$binbase" ]; then
-    check_binary_owner
-    if [ -e "$binary" ] || [ -L "$binary" ]; then plain_file "$binary"; rm -f -- "$binary"; fi
-    rmdir -- "$(dirname "$binary")" 2>/dev/null || true
-    # Retain the global marker even when only an empty installation remains.
-    # Removing the marker before its directory would make a crash unrecoverable.
-fi
+sync /etc/systemd/system
+# The shared, immutable versioned binary cache is retained on uninstall:
+# another Machine can still use it, including a stopped publication.
 # The dedicated, locked system account is deliberately retained: an admin may
 # have granted it other resources. It has no authorized key or login shell.
 rm -rf --one-file-system -- "$owned"
-# Keep the immutable global ownership tombstone. It both prevents another
-# Machine from taking over the host and makes interrupted teardown retryable.
+# The per-UID terminal marker is outside the recursively deleted payload.
+sync "$base"
 printf 'TUNNELLB_OK\n'
 "#,
     );

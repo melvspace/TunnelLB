@@ -1,4 +1,4 @@
-//! Pinned, bounded OpenSSH provisioning of dedicated FRP hosts.
+//! Pinned, bounded OpenSSH provisioning of shared external FRP hosts.
 use std::{net::Ipv4Addr, path::Path, time::Duration};
 
 use anyhow::{Context, Result, ensure};
@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::time::timeout;
 
-use crate::api::Publication;
+use crate::api::{PortRange, Publication};
 
 mod binary;
 mod command;
@@ -21,13 +21,16 @@ use binary::{BINARY_LIMIT, binary_digest, parse_architecture};
 use command::{execute, isolated_command, private_file, read_limited_file};
 use pin::{parse_pin, select_scan_pin};
 use request::{FIELD_LIMIT, validate_request};
-use scripts::{apply_script, enroll_script, probe_script, remove_script, uninstall_script};
+use scripts::{
+    apply_script, enroll_script, probe_script, remove_script, reserve_script, uninstall_script,
+};
 use ssh::Ssh;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Operation {
     Enroll,
+    Reserve,
     Apply,
     Remove,
     Uninstall,
@@ -47,10 +50,33 @@ pub struct Request {
     pub server_certificate: Option<String>,
     pub server_private_key: Option<String>,
     pub expected_known_hosts: Option<String>,
-    /// Required for Apply and Remove: lowercase SHA-256 hex of the exact
+    /// Required for Reserve, Apply and Remove: lowercase SHA-256 hex of the exact
     /// persisted server certificate PEM bytes. Enroll/Uninstall use None.
     #[serde(default)]
     pub generation: Option<String>,
+    #[serde(default)]
+    pub reservation: Option<ReservationRequest>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReservationRequest {
+    pub control_port_range: PortRange,
+    pub excluded_ports: Vec<u16>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum AllocationOutcome {
+    Reserved { control_port: u16 },
+    PortConflict { port: u16 },
+    ControlRangeExhausted,
+    ReservationChanged,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -62,11 +88,13 @@ pub struct Outcome {
     /// Enroll before considering the host ready; pinned operations return amd64
     /// or arm64.
     pub architecture: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allocation: Option<AllocationOutcome>,
 }
 
 pub(crate) const OPERATION_TIMEOUT: Duration = Duration::from_secs(480);
 
-/// Provision a dedicated host. No local shell or SSH agent is used. The bundled
+/// Provision a shared host. No local shell or SSH agent is used. The bundled
 /// directory contains `<amd64|arm64>/frps`; no runtime download is performed.
 ///
 /// Unpinned enrollment only discovers a key and returns an empty architecture,
@@ -116,6 +144,7 @@ async fn run_inner(request: &Request, key_path: &Path, frp_directory: &Path) -> 
             known_hosts: pin.line,
             fingerprint: pin.fingerprint,
             architecture: String::new(),
+            allocation: None,
         });
     };
 
@@ -165,16 +194,23 @@ async fn run_inner(request: &Request, key_path: &Path, frp_directory: &Path) -> 
             enroll_script(request, binary.as_deref(), expected_digest)?
         }
 
+        Operation::Reserve => reserve_script(request)?,
         Operation::Apply => apply_script(request)?,
         Operation::Remove => remove_script(request)?,
         Operation::Uninstall => uninstall_script(request)?,
     };
 
-    ssh.script(&script, Duration::from_secs(390)).await?;
+    let output = ssh.script(&script, Duration::from_secs(390)).await?;
+    let allocation = if request.operation == Operation::Reserve {
+        Some(scripts::parse_allocation(&output)?)
+    } else {
+        None
+    };
 
     Ok(Outcome {
         known_hosts: pin.line,
         fingerprint: pin.fingerprint,
         architecture,
+        allocation,
     })
 }

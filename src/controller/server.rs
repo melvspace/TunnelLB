@@ -29,9 +29,19 @@ pub(super) async fn reconcile_server(
     let _lock = context.serial.lock().await;
     match server_inner(&server, &context).await {
         Ok(()) => Ok(context.action()),
-        Err(_) => {
-            let _ = server_status(&server, &context, "Degraded", "ReconcileFailed",
-                "Operation failed; inspect SSH Job state and configuration. Credentials are never included in errors.").await;
+        Err(error) => {
+            let failure = error.downcast_ref::<jobs::Failure>();
+            let reason = failure.map_or("ReconcileFailed", jobs::Failure::reason);
+            let message = failure.map_or_else(
+                || "Operation failed; inspect SSH Job state and configuration. Credentials are never included in errors.".into(),
+                ToString::to_string,
+            );
+            let phase = if server.metadata.deletion_timestamp.is_some() {
+                "Deleting"
+            } else {
+                "Degraded"
+            };
+            let _ = server_status(&server, &context, phase, reason, &message).await;
             Err(ReconcileError)
         }
     }
@@ -146,8 +156,15 @@ pub(super) async fn server_inner(server: &Server, context: &Context) -> Result<(
                 }
             }
 
-            State::Failed(_) => {
-                server_status(server, context, "Degraded", "SSHFailed", "SSH provisioning failed; check host identity, key, sudo and systemd prerequisites.").await?;
+            State::Failed(error) => {
+                server_status(
+                    server,
+                    context,
+                    "Degraded",
+                    error.reason(),
+                    &error.to_string(),
+                )
+                .await?;
             }
 
             State::Complete(outcome) => {
@@ -241,10 +258,11 @@ pub(super) async fn delete_server(server: &Server, context: &Context) -> Result<
         )
         .await?
         {
-            State::Pending | State::Failed(_) => {
+            State::Pending => {
                 return server_status(server, context, "Deleting", "CleanupPending", "Remote uninstall is pending; force-delete explicitly abandons remote resources.").await;
             }
 
+            State::Failed(error) => return Err(error.into()),
             State::Complete(_) => {}
         }
     }

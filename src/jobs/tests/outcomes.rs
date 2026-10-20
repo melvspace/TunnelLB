@@ -109,7 +109,7 @@ fn completed_job_rejects_ambiguous_malformed_missing_and_oversized_results() {
             panic!("false success");
         };
 
-        assert!(!error.contains(SECRET));
+        assert!(!error.to_string().contains(SECRET));
     }
 
     let exact = format!(
@@ -139,8 +139,12 @@ fn worker_and_kubernetes_errors_never_retain_credential_strings() {
         panic!("expected failure");
     };
 
-    assert!(error.contains("worker reported a provisioning error"));
-    assert!(!error.contains(SECRET));
+    assert!(
+        error
+            .to_string()
+            .contains("worker reported a provisioning error")
+    );
+    assert!(!error.to_string().contains(SECRET));
     let error = api_error(
         "create SSH artifact",
         kube::Error::Api(
@@ -157,4 +161,86 @@ fn worker_and_kubernetes_errors_never_retain_credential_strings() {
         assert!(!formatted.contains(SECRET));
         assert!(formatted.contains("422"));
     }
+}
+
+#[test]
+fn failed_owned_workers_report_only_allowlisted_diagnostics() {
+    for (code, expected) in [
+        (
+            "firewall-inspection",
+            provision::Diagnostic::FirewallInspection,
+        ),
+        (
+            "firewall-configuration",
+            provision::Diagnostic::FirewallConfiguration,
+        ),
+        ("firewall-cleanup", provision::Diagnostic::FirewallCleanup),
+        (
+            "firewall-unavailable",
+            provision::Diagnostic::FirewallUnavailable,
+        ),
+        (
+            "control-unreachable",
+            provision::Diagnostic::ControlUnreachable,
+        ),
+    ] {
+        let message = json!({"error": code}).to_string();
+        let State::Failed(error) = result(
+            &request(),
+            &terminal(job(), "Failed"),
+            &[pod(Some(message.clone()), 1)],
+        ) else {
+            panic!("expected failure");
+        };
+        assert_eq!(error.reason(), expected.reason());
+        assert!(error.to_string().ends_with(&expected.to_string()));
+        assert!(!format!("{error:?}").contains(SECRET));
+        // The diagnostic is not an alternative success payload.
+        let State::Failed(error) = completion(&[pod(Some(message), 0)]) else {
+            panic!("error envelope accepted as success");
+        };
+        assert_eq!(error.reason(), "SSHFailed");
+    }
+}
+
+#[test]
+fn malformed_foreign_and_ambiguous_worker_diagnostics_stay_generic() {
+    let valid = json!({"error": "control-unreachable"}).to_string();
+    let foreign = mutated(&pod(Some(valid.clone()), 1), |pod| {
+        pod["metadata"]["ownerReferences"][0]["uid"] = json!("another-job");
+    });
+    let sidecar = mutated(&pod(Some(valid.clone()), 1), |pod| {
+        pod["status"]["containerStatuses"][0]["name"] = json!("sidecar");
+    });
+
+    for pods in [
+        vec![foreign],
+        vec![sidecar],
+        vec![pod(Some(valid.clone()), 0)],
+        vec![pod(Some(json!({"error": SECRET}).to_string()), 1)],
+        vec![pod(
+            Some(json!({"error": "control-unreachable", "message": SECRET}).to_string()),
+            1,
+        )],
+        vec![pod(Some(valid.clone() + &" ".repeat(RESULT_LIMIT)), 1)],
+        vec![
+            pod(Some(valid.clone()), 1),
+            pod(Some(json!({"error": "firewall-cleanup"}).to_string()), 1),
+        ],
+    ] {
+        let State::Failed(error) = result(&request(), &terminal(job(), "Failed"), &pods) else {
+            panic!("expected failure");
+        };
+        assert_eq!(error.reason(), "SSHFailed");
+        assert!(!format!("{error:#}").contains(SECRET));
+        assert!(!error.to_string().contains("control port"));
+    }
+
+    // Retrying the same cause remains unambiguous; Pending Jobs still retry.
+    let pods = [pod(Some(valid.clone()), 1), pod(Some(valid), 1)];
+    let State::Failed(error) = result(&request(), &terminal(job(), "FailureTarget"), &pods) else {
+        panic!("expected failure");
+    };
+    assert_eq!(error.reason(), "ControlUnreachable");
+    assert!(matches!(result(&request(), &job(), &pods), State::Pending));
 }

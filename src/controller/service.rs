@@ -1,5 +1,6 @@
 use crate::{
     api::{CLASS, Publication, SERVICE_UID_LABEL, Server, ServiceRequest},
+    jobs,
     store::PublicationRecord,
     validation,
 };
@@ -38,16 +39,14 @@ pub(super) async fn reconcile_service(
         } else {
             Action::await_change()
         }),
-        Err(_) => {
-            let _ = service_condition(
-                &service,
-                &context,
-                false,
-                "ReconcileFailed",
-                "Operation failed and will retry; check Server and SSH Job state.",
-                None,
-            )
-            .await;
+        Err(error) => {
+            let failure = error.downcast_ref::<jobs::Failure>();
+            let reason = failure.map_or("ReconcileFailed", jobs::Failure::reason);
+            let message = failure.map_or_else(
+                || "Operation failed and will retry; check Server and SSH Job state.".into(),
+                ToString::to_string,
+            );
+            let _ = service_condition(&service, &context, false, reason, &message, None).await;
             Err(ReconcileError)
         }
     }
@@ -69,8 +68,16 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
 
     if service.metadata.deletion_timestamp.is_some() || !managed {
         let mut complete = true;
+        let mut failure = None;
         for record in &records {
-            complete &= cleanup_publication(record, context, false).await?;
+            match cleanup_publication(record, context, false).await {
+                Ok(cleaned) => complete &= cleaned,
+                Err(error) if error.is::<jobs::Failure>() => {
+                    complete = false;
+                    failure = Some(error);
+                }
+                Err(error) => return Err(error),
+            }
         }
 
         // Tenant abandonment can detach the Service, never its port lease.
@@ -85,6 +92,10 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
             }
 
             return Ok(());
+        }
+
+        if let Some(error) = failure {
+            return Err(error);
         }
 
         if complete {
@@ -282,6 +293,7 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
 
     let mut ready = records.len() == requested;
     let mut conflict = None;
+    let mut failure = None;
     for record in &mut records {
         let server = servers
             .iter()
@@ -309,9 +321,27 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
                     ready = false;
                     conflict = Some(reason);
                 }
-                Err(error) => return Err(error),
+                Err(error) => match error.downcast::<jobs::Failure>() {
+                    Ok(error) => {
+                        ready = false;
+                        failure = Some(error);
+                    }
+                    Err(error) => return Err(error),
+                },
             },
         }
+    }
+
+    if let Some(error) = failure {
+        return service_condition(
+            service,
+            context,
+            false,
+            error.reason(),
+            &error.to_string(),
+            Some(published_ips(&records)),
+        )
+        .await;
     }
 
     if let Some(conflict) = conflict {

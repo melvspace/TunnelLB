@@ -1,4 +1,4 @@
-//! Accept bounded results only from the current Job's owned, successful worker.
+//! Accept bounded results only from the current Job's owned worker.
 
 use k8s_openapi::api::{
     batch::v1::Job,
@@ -8,7 +8,7 @@ use kube::ResourceExt;
 use serde_json::Value;
 
 use super::{
-    State,
+    Failure, State,
     identity::{job_reference, same_owner},
 };
 use crate::provision;
@@ -192,7 +192,7 @@ fn valid_allocation(
     }
 }
 
-fn failure_message(job: &Job, pods: &[Pod]) -> String {
+fn failure_message(job: &Job, pods: &[Pod]) -> Failure {
     let reason = job
         .status
         .as_ref()
@@ -210,19 +210,39 @@ fn failure_message(job: &Job, pods: &[Pod]) -> String {
         _ => "execution failed",
     };
 
-    let reported_error = pods
+    let messages: Vec<_> = pods
         .iter()
         .filter_map(|p| worker(job, p))
         .filter(|s| s.exit_code != 0)
         .filter_map(|s| s.message.as_deref())
         .filter(|m| m.len() <= RESULT_LIMIT)
-        .any(|m| serde_json::from_str::<Value>(m).is_ok_and(|v| v.get("error").is_some()));
+        .collect();
+    let reported_error = messages.iter().any(|m| {
+        serde_json::from_str::<Value>(m).is_ok_and(|v| v.is_object() && v.get("error").is_some())
+    });
+    let mut diagnostics = messages.iter().filter_map(|message| {
+        serde_json::from_str::<provision::FailureOutcome>(message)
+            .ok()
+            .map(|outcome| outcome.error)
+            .filter(|diagnostic| *diagnostic != provision::Diagnostic::WorkerFailed)
+    });
+    let diagnostic = diagnostics.next().filter(|first| {
+        // A Job may have retried. Conflicting reports cannot identify one cause.
+        diagnostics.all(|other| other == *first)
+    });
 
     // An error can contain arbitrary remote output, SSH key bytes, or fragments
     // of credentials. Fixed diagnostics are safer than substring redaction.
-    if reported_error {
+    let message = if let Some(diagnostic) = diagnostic {
+        format!("SSH Job {reason}; {diagnostic}")
+    } else if reported_error {
         format!("SSH Job {reason}; worker reported a provisioning error")
     } else {
         format!("SSH Job {reason}; no valid worker error result")
+    };
+
+    Failure {
+        message,
+        diagnostic,
     }
 }

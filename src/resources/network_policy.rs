@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    net::Ipv4Addr,
+    net::{Ipv4Addr, SocketAddrV4},
 };
 
 use k8s_openapi::{
@@ -58,18 +58,20 @@ pub fn connector_policy(
     )
 }
 
+/// `control_port` is supplied only for Apply, after validating its publication.
 pub fn ssh_policy(
     name: &str,
-    address: Ipv4Addr,
-    ssh_port: u16,
+    address: SocketAddrV4,
+    control_port: Option<u16>,
     options: &ResourceOptions,
 ) -> NetworkPolicy {
-    policy(
-        name,
-        ssh_labels(name),
-        vec![edge_rule(address, ssh_port)],
-        options,
-    )
+    let mut egress = vec![edge_rule(*address.ip(), address.port())];
+
+    if let Some(port) = control_port {
+        egress.push(edge_rule(*address.ip(), port));
+    }
+
+    policy(name, ssh_labels(name), egress, options)
 }
 
 fn policy(

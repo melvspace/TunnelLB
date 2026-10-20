@@ -101,6 +101,7 @@ pub(super) async fn ensure_publication(
     }
 
     let healthy = matching && existing.as_ref().is_some_and(deployment_ready);
+    let mut failure = None;
 
     if record.applied_hash.as_ref() != Some(&record.config_hash) || (matching && !healthy) {
         // Unready connectors reuse the immutable Job result within each
@@ -131,13 +132,22 @@ pub(super) async fn ensure_publication(
         )
         .await?
         {
-            State::Pending | State::Failed(_) => {
+            State::Pending => {
                 // Existing clients retain last configuration through edge/API outages.
                 if record.applied_hash.as_ref() != Some(&record.config_hash) {
                     return Ok(false);
                 }
             }
 
+            State::Failed(error) => {
+                if record.applied_hash.as_ref() != Some(&record.config_hash) {
+                    return Err(error.into());
+                }
+
+                // A failed remote repair must not block local Secret, policy,
+                // or Deployment repairs for an already-applied configuration.
+                failure = Some(error);
+            }
             State::Complete(_) => {
                 record.applied_hash = Some(record.config_hash.clone());
                 context.store.save_record(record).await?;
@@ -191,6 +201,11 @@ pub(super) async fn ensure_publication(
     }
 
     context.store.save_record(record).await?;
+
+    if let Some(error) = failure {
+        return Err(error.into());
+    }
+
     Ok(healthy)
 }
 
@@ -300,7 +315,8 @@ pub(super) async fn cleanup_publication(
         )
         .await?
         {
-            State::Pending | State::Failed(_) => return Ok(false),
+            State::Pending => return Ok(false),
+            State::Failed(error) => return Err(error.into()),
             State::Complete(_) => {}
         }
     }

@@ -4,12 +4,13 @@ use std::{net::Ipv4Addr, path::Path, time::Duration};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::time::timeout;
+use tokio::{net::TcpStream, time::timeout};
 
 use crate::api::{PortRange, Publication};
 
 mod binary;
 mod command;
+mod diagnostics;
 mod pin;
 mod request;
 mod scripts;
@@ -25,6 +26,8 @@ use scripts::{
     apply_script, enroll_script, probe_script, remove_script, reserve_script, uninstall_script,
 };
 use ssh::Ssh;
+
+pub use diagnostics::{Diagnostic, FailureOutcome};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -201,6 +204,15 @@ async fn run_inner(request: &Request, key_path: &Path, frp_directory: &Path) -> 
     };
 
     let output = ssh.script(&script, Duration::from_secs(390)).await?;
+
+    if request.operation == Operation::Apply {
+        let publication = request
+            .publication
+            .as_ref()
+            .context("Apply requires a publication")?;
+        probe_control(request.address, publication.control_port).await?;
+    }
+
     let allocation = if request.operation == Operation::Reserve {
         Some(scripts::parse_allocation(&output)?)
     } else {
@@ -213,4 +225,55 @@ async fn run_inner(request: &Request, key_path: &Path, frp_directory: &Path) -> 
         architecture,
         allocation,
     })
+}
+
+async fn probe_control(address: Ipv4Addr, port: u16) -> Result<()> {
+    match timeout(Duration::from_secs(5), TcpStream::connect((address, port))).await {
+        Ok(Ok(_)) => Ok(()),
+        _ => Err(Diagnostic::ControlUnreachable.into()),
+    }
+}
+
+#[cfg(test)]
+mod reachability_tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn control_probe_reaches_the_requested_listener() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        probe_control(Ipv4Addr::LOCALHOST, address.port())
+            .await
+            .unwrap();
+        let (connection, _) = timeout(Duration::from_secs(1), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(connection.local_addr().unwrap(), address);
+    }
+
+    #[tokio::test]
+    async fn closed_control_port_returns_only_the_allowlisted_diagnostic() {
+        // A bound but non-listening socket holds the port without allowing
+        // another test process to claim it between choosing and probing it.
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+        let port = socket.local_addr().unwrap().port();
+        let error = timeout(
+            Duration::from_secs(6),
+            probe_control(Ipv4Addr::LOCALHOST, port),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<Diagnostic>(),
+            Some(&Diagnostic::ControlUnreachable)
+        );
+        assert_eq!(
+            format!("{error:#}"),
+            Diagnostic::ControlUnreachable.to_string()
+        );
+    }
 }

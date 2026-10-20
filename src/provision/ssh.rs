@@ -5,8 +5,8 @@ use anyhow::{Result, bail, ensure};
 use tokio::process::Command;
 
 use super::{
-    Request,
-    command::{execute, isolated_command},
+    Diagnostic, Request,
+    command::{Output, execute, isolated_command},
 };
 
 pub(super) struct Ssh<'a> {
@@ -81,35 +81,43 @@ impl Ssh<'_> {
     pub(super) async fn script(&self, script: &str, duration: Duration) -> Result<String> {
         let output = execute(self.command(), script.as_bytes(), duration).await?;
 
-        if !output.success {
-            if output
-                .stderr
-                .contains("REMOTE HOST IDENTIFICATION HAS CHANGED")
-                || output.stderr.contains("Host key verification failed")
-            {
-                bail!(
-                    "SSH host key does not match the stored pin; investigate the host change and explicitly re-enroll, never silently re-trust it"
-                );
-            }
+        checked_output(output)
+    }
+}
 
-            for line in output.stdout.lines().chain(output.stderr.lines()) {
-                if let Some(code) = line.strip_prefix("TUNNELLB_ERROR ") {
-                    bail!("{}", remote_error(code));
-                }
-            }
-
+fn checked_output(output: Output) -> Result<String> {
+    if !output.success {
+        if output
+            .stderr
+            .contains("REMOTE HOST IDENTIFICATION HAS CHANGED")
+            || output.stderr.contains("Host key verification failed")
+        {
             bail!(
-                "remote provisioning failed; verify SSH reachability, the authorized private key and root or passwordless sudo access; remote cleanup may remain pending"
+                "SSH host key does not match the stored pin; investigate the host change and explicitly re-enroll, never silently re-trust it"
             );
         }
 
-        ensure!(
-            output.stdout.lines().any(|line| line == "TUNNELLB_OK"),
-            "remote worker returned no valid success marker"
-        );
+        for line in output.stdout.lines().chain(output.stderr.lines()) {
+            if let Some(code) = line.strip_prefix("TUNNELLB_ERROR ") {
+                if let Some(diagnostic) = Diagnostic::from_remote_marker(code) {
+                    return Err(diagnostic.into());
+                }
 
-        Ok(output.stdout)
+                bail!("{}", remote_error(code));
+            }
+        }
+
+        bail!(
+            "remote provisioning failed; verify SSH reachability, the authorized private key and root or passwordless sudo access; remote cleanup may remain pending"
+        );
     }
+
+    ensure!(
+        output.stdout.lines().any(|line| line == "TUNNELLB_OK"),
+        "remote worker returned no valid success marker"
+    );
+
+    Ok(output.stdout)
 }
 
 fn remote_error(code: &str) -> &'static str {
@@ -203,6 +211,47 @@ fn remote_error(code: &str) -> &'static str {
 mod tests {
     use super::*;
     use crate::provision::{Operation, test_support::request};
+
+    #[test]
+    fn remote_markers_produce_typed_errors_without_remote_output() {
+        for (code, diagnostic) in [
+            ("firewall-inspection", Diagnostic::FirewallInspection),
+            ("firewall-configuration", Diagnostic::FirewallConfiguration),
+            ("firewall-cleanup", Diagnostic::FirewallCleanup),
+            ("firewall-unavailable", Diagnostic::FirewallUnavailable),
+            ("control-unreachable", Diagnostic::ControlUnreachable),
+        ] {
+            for stderr in [false, true] {
+                let marker = format!("SECRET_SENTINEL\nTUNNELLB_ERROR {code}\n");
+                let error = checked_output(Output {
+                    success: false,
+                    stdout: if stderr {
+                        String::new()
+                    } else {
+                        marker.clone()
+                    },
+                    stderr: if stderr { marker } else { String::new() },
+                })
+                .unwrap_err();
+                assert_eq!(error.downcast_ref::<Diagnostic>(), Some(&diagnostic));
+                assert!(!format!("{error:?}").contains("SECRET_SENTINEL"));
+            }
+        }
+    }
+
+    #[test]
+    fn remote_codes_must_match_exactly_and_never_echo_unknown_data() {
+        for code in ["SECRET_SENTINEL", "firewall-inspection SECRET_SENTINEL"] {
+            let error = checked_output(Output {
+                success: false,
+                stdout: format!("TUNNELLB_ERROR {code}\n"),
+                stderr: "SECRET_SENTINEL".into(),
+            })
+            .unwrap_err();
+            assert!(error.downcast_ref::<Diagnostic>().is_none());
+            assert!(!format!("{error:#}").contains("SECRET_SENTINEL"));
+        }
+    }
 
     #[tokio::test]
     async fn ssh_configuration_disables_other_identity_and_trust_sources() {

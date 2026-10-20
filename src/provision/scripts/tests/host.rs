@@ -17,6 +17,19 @@ impl TestHost {
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::create_dir(directory.path().join("systemd")).unwrap();
         std::fs::create_dir(directory.path().join("active")).unwrap();
+        std::fs::create_dir(directory.path().join("ufw-apps")).unwrap();
+        std::fs::create_dir(directory.path().join("ufw-rules")).unwrap();
+        std::fs::set_permissions(
+            directory.path().join("ufw-apps"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        std::fs::write(directory.path().join("user.rules"), "").unwrap();
+        std::fs::set_permissions(
+            directory.path().join("user.rules"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
 
         Self(directory)
     }
@@ -38,6 +51,34 @@ test_root={root}
 chown() {{ :; }}
 getent() {{ return 1; }}
 useradd() {{ :; }}
+command() {{
+    if [ "$*" = "-v ufw" ] && [ -f "$test_root/no-ufw" ]; then return 1; fi
+    builtin command "$@"
+}}
+ufw() {{
+    printf '%s\n' "$*" >> "$test_root/firewall-commands"
+    case "$*" in
+        status)
+            [ ! -f "$test_root/fail-firewall-inspection" ] || return 1
+            if [ -f "$test_root/inactive-ufw" ]; then printf 'Status: inactive\n'; else printf 'Status: active\n'; fi ;;
+        "show added")
+            for rule in "$test_root/ufw-rules/"*; do
+                [ -f "$rule" ] && cat "$rule"
+            done
+            return 0 ;;
+        "allow in from 0.0.0.0/0 to any app "*)
+            [ ! -f "$test_root/fail-firewall-open" ] || return 1
+            local profile=${{8}} tag=${{10}}
+            [ "${{#profile}}" -le 64 ] || return 1
+            [ -f "$test_root/ufw-apps/$profile" ] || return 1
+            printf "ufw allow %s comment '%s'\n" "$profile" "$tag" > "$test_root/ufw-rules/$profile" ;;
+        "--force delete allow in from 0.0.0.0/0 to any app "*)
+            [ ! -f "$test_root/fail-firewall-close" ] || return 1
+            local profile=${{10}}
+            command rm -f "$test_root/ufw-rules/$profile" ;;
+        *) return 1 ;;
+    esac
+}}
 ss() {{
     printf '%s\n' "$*" >> "$test_root/socket-probes"
     if [ "$2" = -lntu ]; then
@@ -64,6 +105,7 @@ sync() {{
     fi
     if [ "$1" = "$retired" ] && [ -f "$test_root/fail-retired-sync" ]; then return 1; fi
     if [ -f "$test_root/fail-directory-sync" ] && [ "$1" = "$(cat "$test_root/fail-directory-sync")" ]; then return 1; fi
+    if [ -f "$test_root/fail-firewall-profile-sync" ] && [ "$1" = "$test_root/ufw-apps" ] && [ ! -f "${{firewall_file:-}}" ]; then return 1; fi
 }}
 install() {{ command cp -- "${{@: -2:1}}" "${{@: -1}}"; chmod 0755 "${{@: -1}}"; }}
 systemctl() {{
@@ -80,6 +122,10 @@ systemctl() {{
         is-active) [ -f "$active" ] ;;
         restart)
             [ ! -f "$test_root/fail-start" ] || return 1
+            if [ ! -f "$test_root/no-ufw" ]; then
+                local firewall_profile="$test_root/ufw-rules/TunnelLB-$(printf '%s' "$owner:$publication" | sha256sum | cut -c1-32)"
+                [ -f "$firewall_profile" ] || return 1
+            fi
             printf '%s\n' "$BASHPID" > "$active" ;;
         disable)
             [ ! -f "$test_root/fail-stop" ] || return 1
@@ -121,6 +167,11 @@ rm() {{
                 self.path("systemd").to_str().unwrap(),
             )
             .replace("/run/tunnellb", self.path("lock").to_str().unwrap())
+            .replace(
+                "/etc/ufw/applications.d",
+                self.path("ufw-apps").to_str().unwrap(),
+            )
+            .replace("/etc/ufw", root.to_str().unwrap())
             .replace(
                 "$(stat -c %u \"$1\")\" = 0",
                 &format!("$(stat -c %u \"$1\")\" = {uid}"),

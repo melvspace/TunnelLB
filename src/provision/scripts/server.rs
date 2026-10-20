@@ -74,6 +74,7 @@ lock
 initialize_host
 check_not_uninstalled
 claim_directory "$owned"
+inspect_firewall
 shared_directory "$binbase"
 chmod 0755 "$base" "$owned" "$binbase"
 if getent passwd "$account" >/dev/null; then
@@ -195,6 +196,20 @@ if [ -e "$claims/$owner" ] || [ -L "$claims/$owner" ]; then
     sync "$claims/$owner"
 fi
 sync "$claims"
+if [ -e "$owned/firewall" ] || [ -L "$owned/firewall" ]; then
+    plain_dir "$owned/firewall"; marker "$owned/firewall/owner" "$owner"
+    # An interrupted installation can leave only durable firewall intent.
+    for intent in "$owned/firewall/"*; do
+        publication=${intent##*/}
+        [ "$publication" != owner ] || continue
+        [ -e "$intent" ] || [ -L "$intent" ] || continue
+        # A crash before persist_marker's rename leaves no committed profile.
+        # These staging files are removed with the owned directory below.
+        case "$publication" in *.pending.*) continue ;; esac
+        case "$publication" in ''|*[!a-zA-Z0-9_-]*) fail owner ;; esac
+        close_firewall
+    done
+fi
 if [ -e "$unitfile" ] || [ -L "$unitfile" ]; then
     check_template
     rm -f -- "$unitfile"

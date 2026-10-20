@@ -1,8 +1,8 @@
 //! Build immutable request artifacts and compare their effective Kubernetes configuration.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, net::SocketAddrV4};
 
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use k8s_openapi::{
     ByteString,
     api::{
@@ -51,6 +51,34 @@ impl Artifacts {
             );
         }
 
+        let control_port = match request.operation {
+            provision::Operation::Apply => {
+                let publication = request
+                    .publication
+                    .as_ref()
+                    .context("SSH Apply requires a publication")?;
+                ensure!(
+                    publication.control_port != 0,
+                    "SSH Apply requires a nonzero publication control port"
+                );
+                ensure!(
+                    publication.control_port != request.ssh_port
+                        && publication
+                            .service
+                            .ports
+                            .iter()
+                            .all(|port| port.port != publication.control_port),
+                    "SSH Apply control port cannot overlap SSH or any numeric public port"
+                );
+
+                Some(publication.control_port)
+            }
+            provision::Operation::Enroll
+            | provision::Operation::Reserve
+            | provision::Operation::Remove
+            | provision::Operation::Uninstall => None,
+        };
+
         let request_bytes =
             serde_json::to_vec(request).map_err(|_| anyhow!("could not serialize SSH request"))?;
         let hash = request_hash(&request_bytes, revision);
@@ -64,22 +92,18 @@ impl Artifacts {
             hash,
         };
 
-        let address = server
-            .spec
-            .address
-            .parse()
-            .map_err(|_| anyhow!("SSH Server requires an IPv4 address"))?;
+        let address = SocketAddrV4::new(request.address, request.ssh_port);
         let key = &server.spec.ssh.private_key_secret_ref;
         let mut job = resources::ssh_job(
             &identity.name,
             address,
-            request.ssh_port,
+            control_port,
             &identity.name,
             &key.name,
             &key.key,
             options,
         );
-        let mut policy = resources::ssh_policy(&identity.name, address, request.ssh_port, options);
+        let mut policy = resources::ssh_policy(&identity.name, address, control_port, options);
         identity.stamp(&mut job.metadata);
         identity.stamp(&mut policy.metadata);
 

@@ -39,10 +39,11 @@ pub(in crate::provision) fn apply_script(request: &Request) -> Result<String> {
     let mut script = prelude(request);
     script.push_str(&publication_vars(request)?);
     script.push_str(&format!(
-        "configuration_hash={}\npublic_ports={}\ncontrol_port={}\n",
+        "configuration_hash={}\npublic_ports={}\ncontrol_port={}\nfirewall_ports={}\n",
         shell_quote(&digest(config.as_bytes())),
         shell_quote(&public_ports(request)?),
         publication.control_port,
+        shell_quote(&super::firewall::ports(publication)),
     ));
     script.push_str(
         r#"
@@ -139,6 +140,7 @@ fi
 chown "root:$account" "$pub" "$pub/frps.toml" "$pub/tls.crt" "$pub/tls.key"
 chmod 0750 "$pub"
 chmod 0640 "$pub/frps.toml" "$pub/tls.crt" "$pub/tls.key"
+open_firewall
 systemctl enable "$unit" >/dev/null 2>&1 || fail start
 if [ "$unchanged" = yes ] && [ -f "$pub/content.sha256" ] && [ "$(cat "$pub/content.sha256")" = "$content_hash" ] && systemctl is-active --quiet "$unit"; then
     printf 'TUNNELLB_OK\n'

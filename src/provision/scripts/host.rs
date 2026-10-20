@@ -208,6 +208,7 @@ cleanup_publication() {{
         # A missing template/payload does not prove its loaded unit stopped.
         [ "$(systemctl show "$unit" --property=MainPID --value)" = 0 ] || fail unit-owner
     fi
+    close_firewall
     if [ -e "$pub" ]; then
         rm -rf --one-file-system -- "$pub"
     fi
@@ -224,6 +225,7 @@ cleanup_publication() {{
         arm64_digest = ARM64_SHA256,
         unit_digest = digest(systemd_unit(&request.server_uid).as_bytes())
     ) + super::reservation::CLAIM_FUNCTIONS
+        + super::firewall::FUNCTIONS
 }
 
 pub(super) fn systemd_unit(uid: &str) -> String {

@@ -50,12 +50,14 @@ enum Command {
 }
 
 #[derive(Args)]
-#[group(required = true, multiple = false)]
+#[group(skip)]
 struct GuardArgs {
-    #[arg(long)]
+    #[arg(long, required_unless_present = "allow", conflicts_with = "allow")]
     config: Option<PathBuf>,
-    #[arg(long)]
+    #[arg(long, required_unless_present = "config")]
     allow: Option<SocketAddrV4>,
+    #[arg(long, requires = "allow", conflicts_with = "config", value_parser = clap::value_parser!(u16).range(1..))]
+    control_port: Option<u16>,
 }
 
 #[derive(Args)]
@@ -111,7 +113,7 @@ async fn dispatch(command: Command) -> Result<()> {
         Command::Crd => Ok(serde_yaml::to_writer(io::stdout().lock(), &Server::crd())?),
         Command::Guard(args) => match (args.config, args.allow) {
             (Some(config), None) => connector::apply_guard(&config).await,
-            (None, Some(address)) => connector::apply_allow(address).await,
+            (None, Some(address)) => connector::apply_allow(address, args.control_port).await,
             _ => Err(anyhow!("Exactly one guard destination is required")),
         },
         Command::Connector { config, ready } => connector::run(&config, &ready).await,
@@ -187,11 +189,22 @@ async fn run_worker(args: WorkerArgs) -> Result<()> {
     // Establish a safe failure result and detect unwritable output before SSH.
     write_result(&mut result, FAILURE_RESULT)?;
     let request = read_request(&args.request)?;
-    let outcome = provision::run(&request, &args.key, &args.frp_directory)
-        .await
-        .map_err(|_| worker_failure())?;
+    let outcome = match provision::run(&request, &args.key, &args.frp_directory).await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            write_failure(&mut result, &error)?;
+
+            return Err(worker_failure());
+        }
+    };
     let bytes = encode_outcome(&outcome)?;
     write_result(&mut result, &bytes)
+}
+
+fn write_failure(file: &mut File, error: &anyhow::Error) -> Result<()> {
+    let outcome = provision::FailureOutcome::from_error(error);
+    let bytes = serde_json::to_vec(&outcome).map_err(|_| worker_failure())?;
+    write_result(file, &bytes)
 }
 
 #[cfg(test)]
@@ -252,6 +265,65 @@ mod tests {
         .unwrap();
         assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
         assert!(Cli::try_parse_from(["tunnellb", "guard", "--allow", "[::1]:22"]).is_err());
+    }
+
+    #[test]
+    fn control_probe_guard_requires_an_ssh_destination_and_nonzero_port() {
+        let cli = Cli::try_parse_from([
+            "tunnellb",
+            "guard",
+            "--allow",
+            "203.0.113.1:22",
+            "--control-port",
+            "20000",
+        ])
+        .unwrap();
+        let Command::Guard(args) = cli.command else {
+            panic!("wrong subcommand");
+        };
+        assert_eq!(args.control_port, Some(20000));
+
+        for args in [
+            vec!["tunnellb", "guard", "--control-port", "20000"],
+            vec![
+                "tunnellb",
+                "guard",
+                "--config",
+                "guard.json",
+                "--control-port",
+                "20000",
+            ],
+            vec![
+                "tunnellb",
+                "guard",
+                "--allow",
+                "203.0.113.1:22",
+                "--control-port",
+                "0",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
+
+    #[test]
+    fn typed_worker_failure_replaces_output_without_serializing_error_context() {
+        let directory = scratch();
+        let path = directory.path().join("result.json");
+        let mut file = File::create(&path).unwrap();
+        write_result(
+            &mut file,
+            &encode_outcome(&outcome("old host".into())).unwrap(),
+        )
+        .unwrap();
+        let error = anyhow::Error::new(provision::Diagnostic::ControlUnreachable)
+            .context("SECRET_SENTINEL");
+        write_failure(&mut file, &error).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes, br#"{"error":"control-unreachable"}"#);
+        let unknown = anyhow!("firewall-inspection SECRET_SENTINEL");
+        write_failure(&mut file, &unknown).unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), FAILURE_RESULT);
     }
 
     #[test]

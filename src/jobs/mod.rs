@@ -14,7 +14,31 @@ pub use runtime::run;
 pub enum State {
     Pending,
     Complete(crate::provision::Outcome),
-    Failed(String),
+    Failed(Failure),
+}
+
+/// Constructed only from fixed local messages and allowlisted worker codes.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct Failure {
+    message: String,
+    diagnostic: Option<crate::provision::Diagnostic>,
+}
+
+impl Failure {
+    pub fn reason(&self) -> &'static str {
+        self.diagnostic
+            .map_or("SSHFailed", crate::provision::Diagnostic::reason)
+    }
+}
+
+impl From<&'static str> for Failure {
+    fn from(message: &'static str) -> Self {
+        Self {
+            message: message.into(),
+            diagnostic: None,
+        }
+    }
 }
 
 #[cfg(test)]

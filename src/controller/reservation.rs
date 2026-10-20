@@ -64,7 +64,8 @@ pub(super) async fn reserve_publication(
     )
     .await?
     {
-        State::Pending | State::Failed(_) => return Ok(()),
+        State::Pending => return Ok(()),
+        State::Failed(error) => return Err(error.into()),
         State::Complete(outcome) => outcome,
     };
 

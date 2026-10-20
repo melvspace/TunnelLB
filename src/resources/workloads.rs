@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, net::Ipv4Addr};
+use std::{collections::BTreeMap, net::SocketAddrV4};
 
 use k8s_openapi::{
     api::{
@@ -102,10 +102,11 @@ pub fn connector_deployment(
 }
 
 /// Create a finite SSH operation. `name` uniquely identifies both its Job and policy.
+/// `control_port` is supplied only for Apply, after validating its publication.
 pub fn ssh_job(
     name: &str,
-    address: Ipv4Addr,
-    ssh_port: u16,
+    address: SocketAddrV4,
+    control_port: Option<u16>,
     request_secret: &str,
     key_secret: &str,
     key_field: &str,
@@ -132,11 +133,15 @@ pub fn ssh_job(
     );
     worker.termination_message_path = Some("/dev/termination-log".into());
     worker.termination_message_policy = Some("File".into());
-    let guard = guard_container(
-        &["guard", "--allow", &format!("{address}:{ssh_port}")],
-        vec![tmp_mount()],
-        options,
-    );
+    let address = address.to_string();
+    let control_port = control_port.map(|port| port.to_string());
+    let mut guard_args = vec!["guard", "--allow", address.as_str()];
+
+    if let Some(port) = control_port.as_deref() {
+        guard_args.extend(["--control-port", port]);
+    }
+
+    let guard = guard_container(&guard_args, vec![tmp_mount()], options);
 
     Job {
         metadata: metadata(name, labels.clone(), options),

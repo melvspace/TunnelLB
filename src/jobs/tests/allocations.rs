@@ -54,7 +54,10 @@ fn assert_invalid(state: State) {
         panic!("expected invalid allocation result");
     };
 
-    assert_eq!(error, "completed SSH Job has an invalid worker result");
+    assert_eq!(
+        error.to_string(),
+        "completed SSH Job has an invalid worker result"
+    );
 }
 
 #[test]

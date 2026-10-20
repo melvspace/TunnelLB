@@ -3,9 +3,11 @@ use std::{io::Write, process::Stdio};
 use super::*;
 use crate::provision::{Operation, binary::AMD64_SHA256, test_support::request};
 
+mod firewall;
 mod host;
 mod lifecycle;
 mod reservation;
+mod ufw;
 use host::TestHost;
 
 #[test]

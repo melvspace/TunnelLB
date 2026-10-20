@@ -37,8 +37,21 @@ Use `root` or an SSH account with passwordless sudo.
 TunnelLB uses this account to install FRP and start or stop its systemd services.
 Add your SSH public key to that account's `authorized_keys` file.
 
-In the server firewall, open the SSH port, your application ports, and TCP 20000–29999 for tunnels.
-TunnelLB does not change firewall rules.
+Make the SSH port reachable before enrollment. TunnelLB checks UFW during enrollment
+and automatically manages a separate UFW application profile for each publication.
+It opens only the assigned TCP control port and the Service's TCP/UDP ports, and removes
+those rules when the publication is deleted or replaced. Existing SSH and administrator
+rules are preserved. If UFW is inactive, rules are saved for later activation;
+TunnelLB does not install, enable, disable, or reset the firewall.
+
+These rules permit IPv4 traffic from any source; the control connection uses TLS and
+a per-publication authentication token. Cloud firewalls and other host firewall managers
+are outside this automation. After applying the edge configuration, TunnelLB checks
+the control port from its worker and reports a specific diagnostic if it is unreachable.
+The Service still waits for the connector to register before receiving an external IP.
+Reconciliation retries automatically after failures. If UFW is removed while managed
+rules exist, restore it to let cleanup complete; TunnelLB keeps the port claims until
+it can confirm that its rules are removed.
 
 Create a Secret from the SSH private key:
 

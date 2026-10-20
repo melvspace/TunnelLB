@@ -66,10 +66,14 @@ fn deployment() -> Value {
 }
 
 fn job() -> Value {
+    ssh_worker_job(None)
+}
+
+fn ssh_worker_job(control_port: Option<u16>) -> Value {
     serde_json::to_value(ssh_job(
         "enroll-123",
-        Ipv4Addr::new(203, 0, 113, 8),
-        2222,
+        "203.0.113.8:2222".parse().unwrap(),
+        control_port,
         "enroll-request",
         "server-key",
         "custom-ed25519",
@@ -85,8 +89,8 @@ fn connector_network_policy() -> Value {
 fn ssh_network_policy() -> Value {
     serde_json::to_value(ssh_policy(
         "enroll-123",
-        Ipv4Addr::new(203, 0, 113, 8),
-        2222,
+        "203.0.113.8:2222".parse().unwrap(),
+        None,
         &options(),
     ))
     .unwrap()
@@ -164,7 +168,7 @@ fn config_change_replaces_the_single_connector_without_changing_selector() {
 
 #[test]
 fn both_workloads_harden_app_and_limit_root_to_the_guard() {
-    for resource in [deployment(), job()] {
+    for resource in [deployment(), job(), ssh_worker_job(Some(21001))] {
         let pod = &resource["spec"]["template"]["spec"];
         assert_eq!(pod["serviceAccountName"], options().service_account);
 
@@ -234,7 +238,7 @@ fn both_workloads_harden_app_and_limit_root_to_the_guard() {
 
 #[test]
 fn tmp_is_shared_and_secret_mounts_are_read_only_and_scoped() {
-    for resource in [deployment(), job()] {
+    for resource in [deployment(), job(), ssh_worker_job(Some(21001))] {
         let pod = &resource["spec"]["template"]["spec"];
         let volumes = pod["volumes"].as_array().unwrap();
         let tmp = volumes
@@ -452,10 +456,59 @@ fn ssh_policy_selects_only_its_operation_and_allows_only_ssh() {
     );
     let other = serde_json::to_value(ssh_policy(
         "enroll-456",
-        Ipv4Addr::new(203, 0, 113, 8),
-        2222,
+        "203.0.113.8:2222".parse().unwrap(),
+        None,
         &options(),
     ))
     .unwrap();
     assert_ne!(policy["spec"]["podSelector"], other["spec"]["podSelector"]);
+}
+
+#[test]
+fn ssh_control_probe_adds_only_the_exact_server_tcp_port() {
+    let ssh_only = job();
+    let job = ssh_worker_job(Some(21001));
+    let policy = serde_json::to_value(ssh_policy(
+        "enroll-123",
+        "203.0.113.8:2222".parse().unwrap(),
+        Some(21001),
+        &options(),
+    ))
+    .unwrap();
+
+    assert_eq!(
+        job["spec"]["template"]["spec"]["initContainers"][0]["args"],
+        json!([
+            "guard",
+            "--allow",
+            "203.0.113.8:2222",
+            "--control-port",
+            "21001"
+        ])
+    );
+    assert_eq!(
+        job["spec"]["template"]["spec"]["containers"],
+        ssh_only["spec"]["template"]["spec"]["containers"]
+    );
+    assert_eq!(
+        policy["spec"],
+        json!({
+            "podSelector": {"matchLabels": {
+                "app.kubernetes.io/managed-by": "tunnellb",
+                "tunnellb.io/ssh-job": "enroll-123"
+            }},
+            "policyTypes": ["Ingress", "Egress"],
+            "ingress": [],
+            "egress": [
+                {
+                    "to": [{"ipBlock": {"cidr": "203.0.113.8/32"}}],
+                    "ports": [{"protocol": "TCP", "port": 2222}]
+                },
+                {
+                    "to": [{"ipBlock": {"cidr": "203.0.113.8/32"}}],
+                    "ports": [{"protocol": "TCP", "port": 21001}]
+                }
+            ]
+        })
+    );
 }

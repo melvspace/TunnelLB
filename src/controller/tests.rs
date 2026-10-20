@@ -30,6 +30,7 @@ use crate::{
 const OPERATOR: &str = "operator";
 const TENANT: &str = "application";
 
+mod diagnostics;
 mod reservations;
 
 struct Exchange {
@@ -716,6 +717,14 @@ async fn persisted_removing_record_cannot_resume_apply_when_service_reverts() {
 }
 
 fn pending_remove_job(record: &PublicationRecord) -> Vec<Exchange> {
+    worker_job(Operation::Remove, Some(record), None)
+}
+
+fn worker_job(
+    operation: Operation,
+    record: Option<&PublicationRecord>,
+    failure: Option<&str>,
+) -> Vec<Exchange> {
     let mut exchanges = Vec::new();
 
     for resource in ["jobs", "secrets", "networkpolicies"] {
@@ -731,8 +740,9 @@ fn pending_remove_job(record: &PublicationRecord) -> Vec<Exchange> {
     let saved = Arc::new(StdMutex::new(BTreeMap::<String, Value>::new()));
     for resource in ["secrets", "networkpolicies", "jobs"] {
         let saved = saved.clone();
-        let publication = record.publication.clone();
-        let generation = record.credential_generation.clone();
+        let publication = record.map(|r| r.publication.clone());
+        let generation = record.and_then(|r| r.credential_generation.clone());
+        let failed = failure.is_some();
         exchanges.push(Exchange::inspect(
             "POST",
             path(resource, ""),
@@ -748,13 +758,21 @@ fn pending_remove_job(record: &PublicationRecord) -> Vec<Exchange> {
                     let secret: Secret = serde_json::from_value(body.clone()).unwrap();
                     let request: Request =
                         serde_json::from_slice(&secret.data.unwrap()["request.json"].0).unwrap();
-                    assert_eq!(request.operation, Operation::Remove);
-                    assert_eq!(request.publication, Some(publication));
+                    assert_eq!(request.operation, operation);
+                    assert_eq!(request.publication, publication);
                     assert_eq!(request.generation, generation);
                 }
 
                 body["metadata"]["uid"] = format!("{resource}-uid").into();
                 body["metadata"]["resourceVersion"] = "10".into();
+
+                if resource == "jobs" && failed {
+                    body["status"] = json!({"conditions": [{
+                        "type": "Failed", "status": "True", "reason": "BackoffLimitExceeded",
+                        "message": "REMOTE_SECRET_SENTINEL",
+                    }]});
+                }
+
                 saved.lock().unwrap().insert(resource.into(), body.clone());
                 body
             },
@@ -782,6 +800,44 @@ fn pending_remove_job(record: &PublicationRecord) -> Vec<Exchange> {
                 body
             },
         ));
+    }
+
+    if let Some(failure) = failure {
+        // Both selectors may return the same Pod; retain its actual Job identity.
+        for _ in 0..2 {
+            let saved = saved.clone();
+            let failure = failure.to_owned();
+            exchanges.push(Exchange::inspect("GET", path("pods", ""), 200, move |_| {
+                let saved = saved.lock().unwrap();
+                let job = &saved["jobs"];
+                list(
+                    "Pod",
+                    vec![json!({
+                        "metadata": {
+                            "name": "worker", "namespace": OPERATOR, "uid": "worker-uid",
+                            "labels": {"batch.kubernetes.io/job-name": job["metadata"]["name"]},
+                            "ownerReferences": [{
+                                "apiVersion": "batch/v1", "kind": "Job",
+                                "name": job["metadata"]["name"], "uid": job["metadata"]["uid"],
+                                "controller": true, "blockOwnerDeletion": true,
+                            }],
+                        },
+                        "status": {
+                            "phase": "Failed",
+                            "message": "REMOTE_SECRET_SENTINEL",
+                            "containerStatuses": [{
+                                "name": "ssh-worker", "image": "tunnellb:test", "imageID": "",
+                                "ready": false, "restartCount": 0,
+                                "state": {"terminated": {
+                                    "exitCode": 1, "message": failure,
+                                    "reason": "REMOTE_SECRET_SENTINEL",
+                                }},
+                            }],
+                        },
+                    })],
+                )
+            }));
+        }
     }
 
     exchanges

@@ -107,6 +107,7 @@ fn interrupted_retirement_is_synced_again_before_any_claim_release() {
 fn cleanup_retries_sync_parents_even_after_entries_have_disappeared() {
     for parent in [
         "state/server-uid/publications",
+        "state/server-uid/firewall",
         "state/server-uid/generations",
         "state/claims/server-uid",
     ] {

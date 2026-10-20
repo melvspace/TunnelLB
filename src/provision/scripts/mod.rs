@@ -2,6 +2,7 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use sha2::{Digest, Sha256};
 
+mod firewall;
 mod host;
 mod publication;
 mod reservation;

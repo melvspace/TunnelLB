@@ -60,14 +60,22 @@ impl GuardConfig {
         Self { allowed }
     }
 
-    pub fn for_ssh(address: SocketAddrV4) -> Self {
-        Self {
-            allowed: vec![AllowedDestination {
+    pub fn for_ssh(address: SocketAddrV4, control_port: Option<u16>) -> Self {
+        let mut allowed = vec![AllowedDestination {
+            address: *address.ip(),
+            port: address.port(),
+            protocol: Protocol::Tcp,
+        }];
+
+        if let Some(port) = control_port {
+            allowed.push(AllowedDestination {
                 address: *address.ip(),
-                port: address.port(),
+                port,
                 protocol: Protocol::Tcp,
-            }],
+            });
         }
+
+        Self { allowed }
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -150,9 +158,9 @@ pub async fn apply_guard(config: &Path) -> Result<()> {
     install_guard(&config).await
 }
 
-/// `guard --allow <IPv4>:<port>` uses precisely one TCP destination for SSH.
-pub async fn apply_allow(address: SocketAddrV4) -> Result<()> {
-    install_guard(&GuardConfig::for_ssh(address)).await
+/// Allows only TCP to the SSH endpoint and optional control port on the same IPv4.
+pub async fn apply_allow(address: SocketAddrV4, control_port: Option<u16>) -> Result<()> {
+    install_guard(&GuardConfig::for_ssh(address, control_port)).await
 }
 
 const RESTORE_TIMEOUT: Duration = Duration::from_secs(10);

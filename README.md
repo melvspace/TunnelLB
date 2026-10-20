@@ -295,8 +295,8 @@ Install a GitHub App on this repository with **Contents**, **Issues**, and
 
 | Setting | Name | Value |
 |---|---|---|
-| Actions secret | `APP_ID` | GitHub App ID |
-| Actions secret | `APP_PRIVATE_KEY` | GitHub App PEM private key |
+| Actions secret | `RELEASE_PLEASE_APP_CLIENT_ID` | GitHub App client ID |
+| Actions secret | `RELEASE_PLEASE_APP_PRIVATE_KEY` | GitHub App PEM private key |
 
 The release workflow creates a short-lived, repository-scoped App token. Its
 release PRs receive normal CI checks. Use Conventional Commit titles when

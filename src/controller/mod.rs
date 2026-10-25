@@ -277,8 +277,8 @@ impl Context {
     }
 
     fn revision(&self, purpose: &str) -> String {
-        // A failed immutable Job is retried in the next bucket. Successful apply
-        // results are persisted, so this never periodically rolls healthy pods.
+        // Each bucket permits a fresh remote reconciliation or failed Job retry.
+        // The revision is not part of connector templates, so healthy pods stay put.
         format!(
             "{}:{}:{}:{}",
             purpose,

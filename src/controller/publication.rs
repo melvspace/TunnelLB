@@ -100,58 +100,56 @@ pub(super) async fn ensure_publication(
         return Ok(false);
     }
 
-    let healthy = matching && existing.as_ref().is_some_and(deployment_ready);
     let mut failure = None;
 
-    if record.applied_hash.as_ref() != Some(&record.config_hash) || (matching && !healthy) {
-        // Unready connectors reuse the immutable Job result within each
-        // ten-minute revision bucket. A later bucket can repair a lost remote
-        // unit while connectors independently reconnect; jobs serialize workers.
-        let mut request = request_for(
-            server,
-            Operation::Apply,
-            publication.server_address,
-            Some(&pin),
-        );
-        request.publication = Some(publication.clone());
-        request.generation = Some(generation);
-        request.server_config = Some(transport::server_config(&publication, &credentials)?);
-        request.server_certificate = Some(credentials.certificate_pem.clone());
-        request.server_private_key = Some(credentials.private_key_pem.clone());
-        let revision = context.revision(&format!(
-            "apply:{}:{}",
-            record.config_hash,
-            serde_json::to_string(&server.spec.ssh)?
-        ));
-        match jobs::run(
-            &context.client,
-            &context.resources,
-            server,
-            &request,
-            &revision,
-        )
-        .await?
-        {
-            State::Pending => {
-                // Existing clients retain last configuration through edge/API outages.
-                if record.applied_hash.as_ref() != Some(&record.config_hash) {
-                    return Ok(false);
-                }
+    // Reuse the immutable Apply result within each ten-minute revision bucket.
+    // Healthy connectors also need remote reconciliation: missing public-port
+    // rules do not affect FRP registration. Unchanged Apply repairs UFW without
+    // restarting FRP or changing the connector template.
+    let mut request = request_for(
+        server,
+        Operation::Apply,
+        publication.server_address,
+        Some(&pin),
+    );
+    request.publication = Some(publication.clone());
+    request.generation = Some(generation);
+    request.server_config = Some(transport::server_config(&publication, &credentials)?);
+    request.server_certificate = Some(credentials.certificate_pem.clone());
+    request.server_private_key = Some(credentials.private_key_pem.clone());
+    let revision = context.revision(&format!(
+        "apply:{}:{}",
+        record.config_hash,
+        serde_json::to_string(&server.spec.ssh)?
+    ));
+    match jobs::run(
+        &context.client,
+        &context.resources,
+        server,
+        &request,
+        &revision,
+    )
+    .await?
+    {
+        State::Pending => {
+            // Existing clients retain last configuration through edge/API outages.
+            if record.applied_hash.as_ref() != Some(&record.config_hash) {
+                return Ok(false);
+            }
+        }
+
+        State::Failed(error) => {
+            if record.applied_hash.as_ref() != Some(&record.config_hash) {
+                return Err(error.into());
             }
 
-            State::Failed(error) => {
-                if record.applied_hash.as_ref() != Some(&record.config_hash) {
-                    return Err(error.into());
-                }
-
-                // A failed remote repair must not block local Secret, policy,
-                // or Deployment repairs for an already-applied configuration.
-                failure = Some(error);
-            }
-            State::Complete(_) => {
-                record.applied_hash = Some(record.config_hash.clone());
-                context.store.save_record(record).await?;
-            }
+            // A failed remote repair must not block local Secret, policy,
+            // or Deployment repairs for an already-applied configuration.
+            failure = Some(error);
+        }
+        State::Complete(_) => {
+            record.applied_hash = Some(record.config_hash.clone());
+            context.store.save_record(record).await?;
         }
     }
 

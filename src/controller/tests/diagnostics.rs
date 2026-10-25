@@ -281,6 +281,11 @@ async fn failed_apply_or_reserve_reports_diagnostics_and_reconciles_remaining_pu
         }
 
         exchanges.extend(publication_reads(&healthy, true));
+        exchanges.extend(worker_job(
+            Operation::Apply,
+            Some(&healthy),
+            None,
+        ));
         exchanges.extend(healthy_connector(&healthy));
         exchanges.push(service_failure(&service, reason, message, Some(ingress)));
         let (context, queue) = mock(exchanges);
@@ -497,6 +502,44 @@ async fn failed_remove_keeps_cleanup_pending_but_allows_tenant_force_delete() {
         let result = reconcile_service(Arc::new(service), context).await;
         assert_eq!(result.is_ok(), force_delete);
         // Neither path may release the port lease or discard remote cleanup state.
+        assert!(queue.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn healthy_publications_reconcile_remote_rules_and_preserve_connectors_on_failure() {
+    for failure in [None, Some(r#"{"error":"firewall-inspection"}"#)] {
+        let (context, _) = mock(vec![]);
+        let mut record = record();
+        record.config_hash = publication_hash(&record.publication, &context.resources).unwrap();
+        record.applied_hash = Some(record.config_hash.clone());
+        record.credential_generation = Some(crate::transport::credential_generation(
+            "synthetic-certificate",
+        ));
+        let server = assigned_server(&record);
+        let mut exchanges = publication_reads(&record, true);
+        exchanges.remove(0);
+        exchanges.extend(worker_job(
+            Operation::Apply,
+            Some(&record),
+            failure,
+        ));
+        exchanges.extend(healthy_connector(&record));
+        let (context, queue) = mock(exchanges);
+        let result = ensure_publication(&mut record, &server, &context).await;
+
+        if failure.is_some() {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Could not inspect UFW")
+            );
+        } else {
+            assert!(result.unwrap());
+        }
+
+        assert!(record.published);
         assert!(queue.lock().unwrap().is_empty());
     }
 }

@@ -1,7 +1,7 @@
 //! Pinned SSH sessions and remote failure reporting.
 use std::{path::Path, time::Duration};
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Result, ensure};
 use tokio::process::Command;
 
 use super::{
@@ -92,9 +92,7 @@ fn checked_output(output: Output) -> Result<String> {
             .contains("REMOTE HOST IDENTIFICATION HAS CHANGED")
             || output.stderr.contains("Host key verification failed")
         {
-            bail!(
-                "SSH host key does not match the stored pin; investigate the host change and explicitly re-enroll, never silently re-trust it"
-            );
+            return Err(Diagnostic::SshHostKeyMismatch.into());
         }
 
         for line in output.stdout.lines().chain(output.stderr.lines()) {
@@ -103,108 +101,35 @@ fn checked_output(output: Output) -> Result<String> {
                     return Err(diagnostic.into());
                 }
 
-                bail!("{}", remote_error(code));
+                return Err(Diagnostic::RemoteFailed.into());
             }
         }
 
-        bail!(
-            "remote provisioning failed; verify SSH reachability, the authorized private key and root or passwordless sudo access; remote cleanup may remain pending"
-        );
+        let diagnostic = [
+            ("Load key ", Diagnostic::SshKeyInvalid),
+            ("Permission denied", Diagnostic::SshAuthentication),
+            ("Connection refused", Diagnostic::SshConnectionRefused),
+            ("No route to host", Diagnostic::SshUnreachable),
+            ("Network is unreachable", Diagnostic::SshUnreachable),
+            ("Connection timed out", Diagnostic::SshTimeout),
+            ("Connection closed", Diagnostic::SshConnectionClosed),
+            ("Connection reset", Diagnostic::SshConnectionClosed),
+            ("no matching ", Diagnostic::SshNegotiation),
+            ("sudo:", Diagnostic::RemoteSudo),
+        ]
+        .into_iter()
+        .find_map(|(pattern, diagnostic)| output.stderr.contains(pattern).then_some(diagnostic))
+        .unwrap_or(Diagnostic::RemoteFailed);
+
+        return Err(diagnostic.into());
     }
 
     ensure!(
         output.stdout.lines().any(|line| line == "TUNNELLB_OK"),
-        "remote worker returned no valid success marker"
+        Diagnostic::RemoteOutput
     );
 
     Ok(output.stdout)
-}
-
-fn remote_error(code: &str) -> &'static str {
-    match code {
-        "sudo" => "SSH account requires root or noninteractive sudo access",
-        "platform" => "external host must run Debian or Ubuntu with systemd as PID 1",
-        "platform-version" => {
-            "FRP hardening requires systemd 244 or newer; upgrade the dedicated host"
-        }
-
-        "architecture" => "external host architecture must be amd64 or arm64",
-        "prerequisites" => {
-            "external host is missing required system tools; install iproute2, util-linux and coreutils"
-        }
-
-        "dedicated-host" => {
-            "external host appears to have k3s or Tailscale installed; use a dedicated host outside the cluster and its VPN"
-        }
-
-        "owner" => {
-            "host ownership marker is absent or belongs to another Server UID; refusing takeover"
-        }
-
-        "legacy-layout" => {
-            "legacy single-owner TunnelLB layout detected; uninstall with the old worker and explicitly reset its retained ownership markers before shared-host enrollment"
-        }
-
-        "server-revoked" => {
-            "Server UID was uninstalled; explicit administrator ownership reset is required before re-enrollment"
-        }
-
-        "generation-revoked" => {
-            "publication credential generation was revoked; delayed Apply cannot restore it"
-        }
-
-        "generation-conflict" => {
-            "publication has a different reserved credential generation or configuration; remove it before applying replacement credentials"
-        }
-
-        "generation-state" => {
-            "publication generation ownership is missing or malformed; refusing ambiguous cleanup or replacement"
-        }
-
-        "claim-state" => {
-            "host-wide port claim is missing or malformed; restore owned reservation state before retrying"
-        }
-
-        "reservation-required" => "publication must reserve host-wide ports before Apply",
-        "socket-state" => "host socket inspection returned malformed numeric listener state",
-        "reservation-conflict" => {
-            "publication reservation has different credentials or ports; remove it before reserving a replacement"
-        }
-
-        "account-owner" => {
-            "FRP system account conflicts with an existing account; refusing to reuse it"
-        }
-
-        "unit-owner" => {
-            "FRP systemd unit or drop-in is not owned or has changed; restore owned configuration before retrying"
-        }
-
-        "unsafe-path" => {
-            "owned host path has an unexpected owner, type or symlink; refusing unsafe modification"
-        }
-
-        "busy" => "another TunnelLB worker owns the remote provisioning lock; retry later",
-        "checksum" => {
-            "remote FRP checksum does not match the immutable pinned binary; administrator repair is required"
-        }
-
-        "configuration" => {
-            "FRP rejected the staged server configuration; check the publication and stored credentials"
-        }
-
-        "occupied-port" => {
-            "a requested public or control port is occupied outside this publication; select unused ports"
-        }
-
-        "start" => {
-            "owned FRP unit failed to start; inspect its systemd journal and verify certificates and port availability"
-        }
-
-        "stop" => "owned FRP unit could not be stopped; remote cleanup remains pending",
-        _ => {
-            "remote provisioning command failed; check host prerequisites and owned paths; remote cleanup may remain pending"
-        }
-    }
 }
 
 #[cfg(test)]
@@ -240,6 +165,58 @@ mod tests {
     }
 
     #[test]
+    fn sudo_failure_survives_the_worker_result_boundary() {
+        let error = checked_output(Output {
+            success: false,
+            stdout: "TUNNELLB_ERROR sudo\n".into(),
+            stderr: "SECRET_SENTINEL".into(),
+        })
+        .unwrap_err();
+        let failure = crate::provision::FailureOutcome::from_error(&error);
+        assert!(failure.error.to_string().contains("noninteractive sudo"));
+        assert!(!failure.error.to_string().contains("SECRET_SENTINEL"));
+    }
+
+    #[test]
+    fn ssh_failures_report_actionable_causes_without_echoing_stderr() {
+        for (stderr, expected) in [
+            (
+                "Permission denied (publickey).",
+                Diagnostic::SshAuthentication,
+            ),
+            (
+                "connect to host: Connection refused",
+                Diagnostic::SshConnectionRefused,
+            ),
+            ("No route to host", Diagnostic::SshUnreachable),
+            ("Connection timed out", Diagnostic::SshTimeout),
+            (
+                "Host key verification failed.",
+                Diagnostic::SshHostKeyMismatch,
+            ),
+            (
+                "Load key SECRET_SENTINEL: invalid format\nPermission denied",
+                Diagnostic::SshKeyInvalid,
+            ),
+            ("sudo: a password is required", Diagnostic::RemoteSudo),
+            ("unrecognized failure", Diagnostic::RemoteFailed),
+        ] {
+            let error = checked_output(Output {
+                success: false,
+                stdout: String::new(),
+                stderr: format!("{stderr}\nSECRET_SENTINEL"),
+            })
+            .unwrap_err();
+            let failure = crate::provision::FailureOutcome::from_error(&error);
+            let encoded = serde_json::to_string(&failure).unwrap();
+            let decoded: crate::provision::FailureOutcome = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(decoded.error, expected);
+            assert!(!decoded.error.to_string().contains("SECRET_SENTINEL"));
+            assert!(!encoded.contains("SECRET_SENTINEL"));
+        }
+    }
+
+    #[test]
     fn remote_codes_must_match_exactly_and_never_echo_unknown_data() {
         for code in ["SECRET_SENTINEL", "firewall-inspection SECRET_SENTINEL"] {
             let error = checked_output(Output {
@@ -248,7 +225,10 @@ mod tests {
                 stderr: "SECRET_SENTINEL".into(),
             })
             .unwrap_err();
-            assert!(error.downcast_ref::<Diagnostic>().is_none());
+            assert_eq!(
+                error.downcast_ref::<Diagnostic>(),
+                Some(&Diagnostic::RemoteFailed),
+            );
             assert!(!format!("{error:#}").contains("SECRET_SENTINEL"));
         }
     }

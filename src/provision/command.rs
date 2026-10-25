@@ -8,6 +8,8 @@ use tokio::{
     time::timeout,
 };
 
+use super::Diagnostic;
+
 const OUTPUT_LIMIT: usize = 64 * 1024;
 
 pub(super) fn isolated_command(program: &str, home: &Path) -> Command {
@@ -35,9 +37,7 @@ pub(super) async fn execute(mut command: Command, input: &[u8], limit: Duration)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .context("starting OpenSSH; ensure openssh-client is installed in the worker image")?;
+    let mut child = command.spawn().context(Diagnostic::SshStart)?;
     let mut stdin = child.stdin.take().context("missing SSH stdin")?;
     let stdout = child.stdout.take().context("missing SSH stdout")?;
     let stderr = child.stderr.take().context("missing SSH stderr")?;
@@ -77,13 +77,9 @@ pub(super) async fn execute(mut command: Command, input: &[u8], limit: Duration)
             let _ = child.wait().await;
 
             match outcome {
-                Ok(Err(error)) => {
-                    Err(error.context("SSH process failed or exceeded its output limit"))
-                }
+                Ok(Err(error)) => Err(error.context(Diagnostic::SshProcess)),
 
-                Err(_) => bail!(
-                    "SSH command timed out; check network reachability and pending remote cleanup"
-                ),
+                Err(_) => bail!(Diagnostic::SshTimeout),
                 _ => unreachable!(),
             }
         }

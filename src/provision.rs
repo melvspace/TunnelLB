@@ -105,22 +105,29 @@ pub(crate) const OPERATION_TIMEOUT: Duration = Duration::from_secs(480);
 /// enrollment to install FRP. Supply the pin to all subsequent requests.
 /// The caller must report pending remote cleanup if this returns an error.
 pub async fn run(request: &Request, key_path: &Path, frp_directory: &Path) -> Result<Outcome> {
-    validate_request(request)?;
+    validate_request(request).context(Diagnostic::InvalidRequest)?;
 
-    timeout(OPERATION_TIMEOUT, run_inner(request, key_path, frp_directory))
-        .await
-        .context("SSH worker exceeded its 480-second operation deadline; remote cleanup may still be pending")?
+    timeout(
+        OPERATION_TIMEOUT,
+        run_inner(request, key_path, frp_directory),
+    )
+    .await
+    .context(Diagnostic::SshTimeout)?
 }
 
 async fn run_inner(request: &Request, key_path: &Path, frp_directory: &Path) -> Result<Outcome> {
     // /tmp is a private emptyDir in the Job. The extra private directory also
     // prevents interactions with other invocations during local verification.
-    tokio::fs::create_dir_all("/tmp/codex").await?;
+    tokio::fs::create_dir_all("/tmp/codex")
+        .await
+        .context(Diagnostic::Workspace)?;
     let workspace = tempfile::Builder::new()
         .prefix("tunnellb-ssh-")
-        .tempdir_in("/tmp/codex")?;
+        .tempdir_in("/tmp/codex")
+        .context(Diagnostic::Workspace)?;
     let pin = if let Some(expected) = &request.expected_known_hosts {
-        parse_pin(expected, request.address, request.ssh_port)?
+        parse_pin(expected, request.address, request.ssh_port)
+            .context(Diagnostic::HostPinInvalid)?
     } else {
         let mut command = isolated_command("ssh-keyscan", workspace.path());
         command.args([
@@ -134,11 +141,9 @@ async fn run_inner(request: &Request, key_path: &Path, frp_directory: &Path) -> 
             &request.address.to_string(),
         ]);
         let output = execute(command, &[], Duration::from_secs(25)).await?;
-        ensure!(
-            output.success,
-            "SSH key scan failed; check the address, SSH port and network reachability"
-        );
-        let pin = select_scan_pin(&output.stdout, request.address, request.ssh_port)?;
+        ensure!(output.success, Diagnostic::SshScan);
+        let pin = select_scan_pin(&output.stdout, request.address, request.ssh_port)
+            .context(Diagnostic::SshScan)?;
 
         // Discovery is deliberately separate from the first authenticated
         // connection. A failed installation cannot discard the trusted key and
@@ -153,12 +158,16 @@ async fn run_inner(request: &Request, key_path: &Path, frp_directory: &Path) -> 
 
     let key = read_limited_file(key_path, FIELD_LIMIT as u64)
         .await
-        .context("reading mounted SSH private key")?;
-    ensure!(!key.is_empty(), "SSH private key is empty");
+        .context(Diagnostic::PrivateKeyRead)?;
+    ensure!(!key.is_empty(), Diagnostic::PrivateKeyRead);
     let private_key = workspace.path().join("identity");
-    private_file(&private_key, &key).await?;
+    private_file(&private_key, &key)
+        .await
+        .context(Diagnostic::Workspace)?;
     let known_hosts = workspace.path().join("known_hosts");
-    private_file(&known_hosts, pin.line.as_bytes()).await?;
+    private_file(&known_hosts, pin.line.as_bytes())
+        .await
+        .context(Diagnostic::Workspace)?;
     let ssh = Ssh {
         request,
         home: workspace.path(),
@@ -170,7 +179,7 @@ async fn run_inner(request: &Request, key_path: &Path, frp_directory: &Path) -> 
     let probe = ssh
         .script(&probe_script(request), Duration::from_secs(45))
         .await?;
-    let architecture = parse_architecture(&probe)?;
+    let architecture = parse_architecture(&probe).context(Diagnostic::RemoteOutput)?;
     let expected_digest = binary_digest(&architecture)?;
     let script = match request.operation {
         Operation::Enroll => {
@@ -185,10 +194,10 @@ async fn run_inner(request: &Request, key_path: &Path, frp_directory: &Path) -> 
                 let path = frp_directory.join(&architecture).join("frps");
                 let bytes = read_limited_file(&path, BINARY_LIMIT)
                     .await
-                    .context("reading bundled FRP binary for the detected architecture")?;
+                    .context(Diagnostic::BundledBinary)?;
                 ensure!(
                     hex::encode(Sha256::digest(&bytes)) == expected_digest,
-                    "bundled frps checksum mismatch; rebuild the image with the pinned official FRP 0.71.1 binary"
+                    Diagnostic::BundledBinary
                 );
 
                 Some(bytes)
@@ -214,7 +223,7 @@ async fn run_inner(request: &Request, key_path: &Path, frp_directory: &Path) -> 
     }
 
     let allocation = if request.operation == Operation::Reserve {
-        Some(scripts::parse_allocation(&output)?)
+        Some(scripts::parse_allocation(&output).context(Diagnostic::RemoteOutput)?)
     } else {
         None
     };

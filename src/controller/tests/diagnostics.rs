@@ -340,6 +340,18 @@ async fn enrollment_and_uninstall_keep_worker_diagnostics_and_server_phase() {
     for (operation, error, reason, message) in [
         (
             Operation::Enroll,
+            r#"{"error":"ssh-authentication"}"#,
+            "SSHFailed",
+            format!("SSH Job retry limit exceeded; {}", Diagnostic::SshAuthentication),
+        ),
+        (
+            Operation::Enroll,
+            r#"{"error":"sudo"}"#,
+            "SSHFailed",
+            format!("SSH Job retry limit exceeded; {}", Diagnostic::RemoteSudo),
+        ),
+        (
+            Operation::Enroll,
             r#"{"error":"firewall-configuration"}"#,
             "FirewallConfigurationFailed",
             "SSH Job retry limit exceeded; Could not configure TunnelLB's UFW rules; reconciliation will retry. Check UFW and TunnelLB's owned application profiles.".into(),

@@ -89,7 +89,7 @@ async fn main() -> ExitCode {
     }
 
     // Parsing and subprocess errors can contain credential material. Only these
-    // fixed messages cross the process boundary; never print the error chain.
+    // fixed messages and allowlisted diagnostics cross the process boundary.
     let failure = match &cli.command {
         Command::Controller(_) => "Controller failed",
         Command::Crd => "CRD generation failed",
@@ -98,10 +98,18 @@ async fn main() -> ExitCode {
         Command::Ready { .. } => "Connector is not ready",
         Command::SshWorker(_) => WORKER_FAILURE,
     };
+    let is_worker = matches!(&cli.command, Command::SshWorker(_));
+
     match dispatch(cli.command).await {
         Ok(()) => ExitCode::SUCCESS,
-        Err(_) => {
-            tracing::error!("{failure}");
+        Err(error) => {
+            if is_worker {
+                let diagnostic = provision::FailureOutcome::from_error(&error).error;
+                tracing::error!(reason = diagnostic.reason(), "{failure}: {diagnostic}");
+            } else {
+                tracing::error!("{failure}");
+            }
+
             ExitCode::FAILURE
         }
     }
@@ -122,18 +130,18 @@ async fn dispatch(command: Command) -> Result<()> {
     }
 }
 
-fn worker_failure() -> anyhow::Error {
-    anyhow!(WORKER_FAILURE)
-}
-
 fn parse_request(reader: impl Read) -> Result<provision::Request> {
     let mut bytes = Vec::new();
     reader
         .take(MAX_REQUEST_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| worker_failure())?;
-    ensure!(bytes.len() <= MAX_REQUEST_BYTES, WORKER_FAILURE);
-    serde_json::from_slice(&bytes).map_err(|_| worker_failure())
+        .map_err(|_| provision::Diagnostic::RequestRead)?;
+    ensure!(
+        bytes.len() <= MAX_REQUEST_BYTES,
+        provision::Diagnostic::InvalidRequest,
+    );
+
+    serde_json::from_slice(&bytes).map_err(|_| provision::Diagnostic::InvalidRequest.into())
 }
 
 fn read_request(path: &Path) -> Result<provision::Request> {
@@ -147,26 +155,42 @@ fn read_request(path: &Path) -> Result<provision::Request> {
         options.custom_flags(libc::O_NONBLOCK);
     }
 
-    let file = options.open(path).map_err(|_| worker_failure())?;
+    let file = options
+        .open(path)
+        .map_err(|_| provision::Diagnostic::RequestRead)?;
     ensure!(
-        file.metadata().map_err(|_| worker_failure())?.is_file(),
-        WORKER_FAILURE
+        file.metadata()
+            .map_err(|_| provision::Diagnostic::RequestRead)?
+            .is_file(),
+        provision::Diagnostic::RequestRead
     );
+
     parse_request(file)
 }
 
 fn encode_outcome(outcome: &provision::Outcome) -> Result<Vec<u8>> {
-    let bytes = serde_json::to_vec(outcome).map_err(|_| worker_failure())?;
-    ensure!(bytes.len() <= MAX_RESULT_BYTES, WORKER_FAILURE);
+    let bytes = serde_json::to_vec(outcome).map_err(|_| provision::Diagnostic::ResultEncoding)?;
+    ensure!(
+        bytes.len() <= MAX_RESULT_BYTES,
+        provision::Diagnostic::ResultEncoding,
+    );
+
     Ok(bytes)
 }
 
 fn write_result(file: &mut File, bytes: &[u8]) -> Result<()> {
-    ensure!(bytes.len() <= MAX_RESULT_BYTES, WORKER_FAILURE);
-    file.rewind().map_err(|_| worker_failure())?;
-    file.set_len(0).map_err(|_| worker_failure())?;
-    file.write_all(bytes).map_err(|_| worker_failure())?;
-    file.flush().map_err(|_| worker_failure())
+    ensure!(
+        bytes.len() <= MAX_RESULT_BYTES,
+        provision::Diagnostic::ResultEncoding,
+    );
+    file.rewind()
+        .map_err(|_| provision::Diagnostic::ResultWrite)?;
+    file.set_len(0)
+        .map_err(|_| provision::Diagnostic::ResultWrite)?;
+    file.write_all(bytes)
+        .map_err(|_| provision::Diagnostic::ResultWrite)?;
+    file.flush()
+        .map_err(|_| provision::Diagnostic::ResultWrite.into())
 }
 
 async fn run_worker(args: WorkerArgs) -> Result<()> {
@@ -180,30 +204,42 @@ async fn run_worker(args: WorkerArgs) -> Result<()> {
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
 
-    let mut result = options.open(&args.result).map_err(|_| worker_failure())?;
+    let mut result = options
+        .open(&args.result)
+        .map_err(|_| provision::Diagnostic::ResultWrite)?;
     ensure!(
-        result.metadata().map_err(|_| worker_failure())?.is_file(),
-        WORKER_FAILURE
+        result
+            .metadata()
+            .map_err(|_| provision::Diagnostic::ResultWrite)?
+            .is_file(),
+        provision::Diagnostic::ResultWrite
     );
     // Kubernetes bind-mounts this file: update it in place, never rename over it.
     // Establish a safe failure result and detect unwritable output before SSH.
     write_result(&mut result, FAILURE_RESULT)?;
-    let request = read_request(&args.request)?;
-    let outcome = match provision::run(&request, &args.key, &args.frp_directory).await {
-        Ok(outcome) => outcome,
+    let operation = async {
+        let request = read_request(&args.request)?;
+
+        let outcome = provision::run(&request, &args.key, &args.frp_directory).await?;
+
+        encode_outcome(&outcome)
+    };
+    let bytes = match operation.await {
+        Ok(bytes) => bytes,
         Err(error) => {
             write_failure(&mut result, &error)?;
 
-            return Err(worker_failure());
+            return Err(error);
         }
     };
-    let bytes = encode_outcome(&outcome)?;
+
     write_result(&mut result, &bytes)
 }
 
 fn write_failure(file: &mut File, error: &anyhow::Error) -> Result<()> {
     let outcome = provision::FailureOutcome::from_error(error);
-    let bytes = serde_json::to_vec(&outcome).map_err(|_| worker_failure())?;
+    let bytes = serde_json::to_vec(&outcome).map_err(|_| provision::Diagnostic::ResultEncoding)?;
+
     write_result(file, &bytes)
 }
 
@@ -372,7 +408,10 @@ mod tests {
     fn parser_errors_do_not_include_secret_input() {
         let request = b"{\"operation\":\"SECRET_SENTINEL\"}";
         let error = parse_request(request.as_slice()).err().unwrap();
-        assert_eq!(format!("{error:#}"), WORKER_FAILURE);
+        assert_eq!(
+            provision::FailureOutcome::from_error(&error).error,
+            provision::Diagnostic::InvalidRequest,
+        );
         assert!(!format!("{error:?}").contains("SECRET_SENTINEL"));
     }
 
@@ -395,7 +434,10 @@ mod tests {
             assert_eq!(encode_outcome(&result).unwrap().len(), MAX_RESULT_BYTES);
             result.known_hosts.push('a');
             let error = encode_outcome(&result).unwrap_err();
-            assert_eq!(format!("{error:#}"), WORKER_FAILURE);
+            assert_eq!(
+                provision::FailureOutcome::from_error(&error).error,
+                provision::Diagnostic::ResultEncoding,
+            );
 
             for value in ["\n", "é"] {
                 result.known_hosts = value.repeat(MAX_RESULT_BYTES / 2);
@@ -423,8 +465,14 @@ mod tests {
         })
         .await
         .unwrap_err();
-        assert_eq!(format!("{error:#}"), WORKER_FAILURE);
-        assert_eq!(std::fs::read(result).unwrap(), FAILURE_RESULT);
+        assert_eq!(
+            provision::FailureOutcome::from_error(&error).error,
+            provision::Diagnostic::InvalidRequest,
+        );
+        assert_eq!(
+            std::fs::read(result).unwrap(),
+            br#"{"error":"invalid-request"}"#,
+        );
     }
 
     #[test]

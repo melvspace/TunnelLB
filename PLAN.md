@@ -2,13 +2,13 @@
 
 ## Product contract
 
-Build a Rust operator using kube-rs. A cluster administrator registers a dedicated
+Build a Rust operator using kube-rs. A cluster administrator registers a
 Debian/Ubuntu systemd server with an existing public IPv4 address, SSH username
 and a reference to a Kubernetes SSH private-key Secret. The operator provisions
 and maintains FRP automatically. The supplied key must already be authorized and
 the account must be root or support noninteractive sudo.
 
-The remote server is not a Kubernetes node or a member of the cluster's VPN.
+The remote server does not need to be a Kubernetes node or a member of the cluster's VPN.
 Cluster-side connectors initiate authenticated, encrypted outbound tunnels.
 Only explicitly published, ordinary pod-backed Services are eligible. Application
 TLS terminates inside the cluster. TCP and UDP are supported; PROXY protocol is

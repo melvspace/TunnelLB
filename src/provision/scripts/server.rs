@@ -36,16 +36,6 @@ case "$systemd_version" in ''|*[!0-9]*) fail platform-version ;; esac
     if request.operation == Operation::Enroll {
         script.push_str(
             r#"
-# This is an advisory eligibility check, not proof about an untrusted host.
-for program in k3s tailscale tailscaled; do
-    if command -v "$program" >/dev/null 2>&1; then fail dedicated-host; fi
-done
-for path in /etc/rancher/k3s /var/lib/rancher/k3s /var/lib/tailscale; do
-    if [ -e "$path" ]; then fail dedicated-host; fi
-done
-for name in k3s.service k3s-agent.service tailscaled.service; do
-    if systemctl cat "$name" >/dev/null 2>&1; then fail dedicated-host; fi
-done
 if [ -e "$binbase" ] || [ -L "$binbase" ]; then
     plain_dir "$binbase"; marker "$binbase/schema" tunnellb-shared-v1
     if [ -e "$binary" ] || [ -L "$binary" ]; then

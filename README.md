@@ -3,7 +3,7 @@
 TunnelLB makes Kubernetes Services available through a public server.
 It installs [FRP](https://github.com/fatedier/frp) and starts encrypted tunnels from the cluster to the server.
 The server sends TCP and UDP traffic through these tunnels to your applications.
-The public server stays outside the cluster.
+The public server does not need to be a Kubernetes node or join the cluster's VPN.
 
 ## Before you start
 
@@ -12,7 +12,6 @@ The public server stays outside the cluster.
 - On k3s, disable ServiceLB with `--disable=servicelb` on each control-plane node.
 - Use Helm 4.
 - Use a public IPv4 server with amd64 or arm64, systemd, and Debian 12/13 or Ubuntu 22.04/24.04.
-- Use a server without k3s or Tailscale.
 
 ## 1. Install TunnelLB
 

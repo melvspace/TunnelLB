@@ -32,7 +32,7 @@ pub enum Diagnostic {
     #[error("external host must run Debian or Ubuntu with systemd as PID 1")]
     RemotePlatform,
     #[serde(rename = "platform-version")]
-    #[error("FRP hardening requires systemd 244 or newer; upgrade the dedicated host")]
+    #[error("FRP hardening requires systemd 244 or newer; upgrade the remote host")]
     RemotePlatformVersion,
     #[serde(rename = "architecture")]
     #[error("external host architecture must be amd64 or arm64")]
@@ -42,11 +42,6 @@ pub enum Diagnostic {
         "external host is missing required system tools; install iproute2, util-linux and coreutils"
     )]
     RemotePrerequisites,
-    #[serde(rename = "dedicated-host")]
-    #[error(
-        "external host appears to have k3s or Tailscale installed; use a dedicated host outside the cluster and its VPN"
-    )]
-    RemoteDedicatedHost,
     #[serde(rename = "owner")]
     #[error("host ownership marker is absent or belongs to another Server UID; refusing takeover")]
     RemoteOwner,
@@ -216,7 +211,6 @@ impl Diagnostic {
             "platform-version" => Some(Self::RemotePlatformVersion),
             "architecture" => Some(Self::RemoteArchitecture),
             "prerequisites" => Some(Self::RemotePrerequisites),
-            "dedicated-host" => Some(Self::RemoteDedicatedHost),
             "owner" => Some(Self::RemoteOwner),
             "legacy-layout" => Some(Self::RemoteLegacyLayout),
             "server-revoked" => Some(Self::RemoteServerRevoked),

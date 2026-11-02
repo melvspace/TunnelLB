@@ -31,10 +31,13 @@ pub struct AllowedDestination {
 }
 
 /// A literal IPv4 allowlist. There are deliberately no CIDRs, DNS names, shell
-/// fragments, port ranges, or "established" exemptions.
+/// fragments or port ranges. Connector monitoring permits only conntrack REPLY
+/// traffic for inbound TCP connections, never new outbound destinations.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GuardConfig {
+    #[serde(default)]
+    pub metrics_replies: bool,
     pub allowed: Vec<AllowedDestination>,
 }
 
@@ -57,7 +60,10 @@ impl GuardConfig {
                 }),
         );
 
-        Self { allowed }
+        Self {
+            allowed,
+            metrics_replies: true,
+        }
     }
 
     pub fn for_ssh(address: SocketAddrV4, control_port: Option<u16>) -> Self {
@@ -75,7 +81,10 @@ impl GuardConfig {
             });
         }
 
-        Self { allowed }
+        Self {
+            allowed,
+            metrics_replies: false,
+        }
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -115,6 +124,13 @@ impl GuardConfig {
     pub fn ipv4_rules(&self) -> Result<String> {
         self.validate()?;
         let mut rules = guard_prefix();
+        // Only replies to inbound TCP connections may bypass the destination
+        // allowlist. Conntrack REPLY cannot authorize a new outbound flow.
+        if self.metrics_replies {
+            rules.push_str(&format!(
+                "-A {GUARD_CHAIN} -p tcp -m conntrack --ctstate ESTABLISHED --ctdir REPLY -j ACCEPT\n"
+            ));
+        }
         let destinations: BTreeSet<_> = self
             .allowed
             .iter()

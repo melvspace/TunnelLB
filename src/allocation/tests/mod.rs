@@ -5,6 +5,7 @@ fn server() -> Server {
     let mut server = Server::new(
         "edge",
         ServerSpec {
+            frp_metrics: false,
             address: "203.0.113.10".into(),
             ssh: SshSpec {
                 user: "root".into(),

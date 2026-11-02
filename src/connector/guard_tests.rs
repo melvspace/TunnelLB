@@ -3,6 +3,7 @@ use super::*;
 #[test]
 fn guard_is_exact_stable_and_does_not_exempt_existing_connections() {
     let mut config = GuardConfig {
+        metrics_replies: false,
         allowed: [
             ("203.0.113.12", 20001, Protocol::Tcp),
             ("10.43.0.4", 443, Protocol::Tcp),
@@ -64,7 +65,14 @@ fn guard_rejects_invalid_and_injected_configuration() {
         assert!(serde_json::from_str::<GuardConfig>(payload).is_err());
     }
 
-    assert!(GuardConfig { allowed: vec![] }.validate().is_err());
+    assert!(
+        GuardConfig {
+            metrics_replies: false,
+            allowed: vec![]
+        }
+        .validate()
+        .is_err()
+    );
 }
 
 #[test]
@@ -162,4 +170,14 @@ async fn ssh_guard_rejects_a_zero_control_port() {
         apply_allow(address, Some(0)).await.unwrap_err().to_string(),
         "guard destination port must be nonzero"
     );
+}
+
+#[test]
+fn connector_scrapes_allow_only_inbound_connection_replies() {
+    let mut config = GuardConfig::for_ssh("203.0.113.1:22".parse().unwrap(), None);
+    config.metrics_replies = true;
+    let rules = config.ipv4_rules().unwrap();
+    assert!(rules.contains("--ctstate ESTABLISHED --ctdir REPLY -j ACCEPT"));
+    assert!(!rules.contains("RELATED"));
+    assert!(!config.ipv6_rules().unwrap().contains("ACCEPT"));
 }

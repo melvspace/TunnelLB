@@ -107,6 +107,8 @@ fn mock(exchanges: Vec<Exchange>) -> (Arc<Context>, Arc<StdMutex<VecDeque<Exchan
     });
     let client = Client::new(service, "wrong-default-namespace");
     let config = Config {
+        metrics_address: "127.0.0.1:0".parse().unwrap(),
+        connector_metrics_address: "0.0.0.0:9090".parse().unwrap(),
         namespace: OPERATOR.into(),
         image: "tunnellb:test".into(),
         image_pull_policy: "IfNotPresent".into(),
@@ -120,6 +122,7 @@ fn mock(exchanges: Vec<Exchange>) -> (Arc<Context>, Arc<StdMutex<VecDeque<Exchan
         Arc::new(Context {
             store: Store::new(client.clone(), config.namespace.clone()),
             resources: ResourceOptions {
+                metrics_address: "0.0.0.0:9090".parse().unwrap(),
                 namespace: config.namespace.clone(),
                 image: config.image.clone(),
                 pull_policy: config.image_pull_policy.clone(),

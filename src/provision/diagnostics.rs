@@ -241,6 +241,20 @@ impl Diagnostic {
             Self::FirewallCleanup => "FirewallCleanupFailed",
             Self::FirewallUnavailable => "FirewallUnavailable",
             Self::ControlUnreachable => "ControlUnreachable",
+            Self::SshAuthentication => "SSHAuthenticationFailed",
+            Self::SshHostKeyMismatch => "SSHHostKeyMismatch",
+            Self::SshTimeout => "SSHTimeout",
+            Self::SshConnectionRefused => "SSHConnectionRefused",
+            Self::SshUnreachable => "SSHUnreachable",
+            Self::SshKeyInvalid => "SSHKeyInvalid",
+            Self::RemotePlatform
+            | Self::RemotePlatformVersion
+            | Self::RemoteArchitecture
+            | Self::RemotePrerequisites => "UnsupportedHost",
+            Self::RemoteSudo => "RemoteSudoRequired",
+            Self::RemoteFailed | Self::RemoteStart | Self::RemoteConfiguration => {
+                "RemoteProvisioningFailed"
+            }
             _ => "SSHFailed",
         }
     }

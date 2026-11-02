@@ -54,6 +54,10 @@ spec:
                 - end
                 - start
                 type: object
+              frpMetrics:
+                default: false
+                description: Enable private IPv6-loopback FRP traffic metrics for new publications.
+                type: boolean
               pool:
                 nullable: true
                 type: string

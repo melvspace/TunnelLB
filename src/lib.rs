@@ -4,6 +4,7 @@ pub mod api;
 pub mod connector;
 pub mod controller;
 pub mod jobs;
+pub mod metrics;
 pub mod provision;
 pub mod resources;
 pub mod store;

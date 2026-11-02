@@ -37,6 +37,8 @@ enum Command {
     Connector {
         #[arg(long)]
         config: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:9090")]
+        metrics_address: std::net::SocketAddr,
         #[arg(long, default_value = DEFAULT_READY_PATH)]
         ready: PathBuf,
     },
@@ -124,7 +126,20 @@ async fn dispatch(command: Command) -> Result<()> {
             (None, Some(address)) => connector::apply_allow(address, args.control_port).await,
             _ => Err(anyhow!("Exactly one guard destination is required")),
         },
-        Command::Connector { config, ready } => connector::run(&config, &ready).await,
+        Command::Connector {
+            config,
+            ready,
+            metrics_address,
+        } => {
+            let mut metrics = tunnellb::metrics::listen(metrics_address).await?;
+            let result = tokio::select! {
+                result = connector::run(&config, &ready) => result,
+                _ = &mut metrics => Err(anyhow!("metrics listener stopped")),
+            };
+            metrics.abort();
+
+            result
+        }
         Command::Ready { path } => connector::ready(&path),
         Command::SshWorker(args) => run_worker(args).await,
     }

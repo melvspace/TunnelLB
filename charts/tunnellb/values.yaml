@@ -40,3 +40,17 @@ logLevel: info
 
 # Replica count is deliberately not configurable until distributed leadership
 # exists. The Deployment always uses replicas: 1 and strategy: Recreate.
+
+# Existing Prometheus only; no monitoring stack or CRDs are installed.
+metrics:
+  enabled: false
+  port: 9090
+  connectorPort: 9090
+  podMonitor:
+    enabled: false
+    labels: {}
+    interval: 30s
+  scraperNamespaceSelector:
+    kubernetes.io/metadata.name: monitoring
+  scraperPodSelector:
+    app.kubernetes.io/name: prometheus

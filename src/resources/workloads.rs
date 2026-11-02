@@ -38,10 +38,21 @@ pub fn connector_deployment(
     let mounts = vec![volume_mount("config", "/etc/tunnellb", true), tmp_mount()];
     let mut connector = container(
         "connector",
-        &["connector", "--config", "/etc/tunnellb/frpc.toml"],
+        &[
+            "connector",
+            "--config",
+            "/etc/tunnellb/frpc.toml",
+            "--metrics-address",
+            &options.metrics_address.to_string(),
+        ],
         mounts.clone(),
         options,
     );
+    connector.ports = Some(vec![k8s_openapi::api::core::v1::ContainerPort {
+        name: Some("metrics".into()),
+        container_port: i32::from(options.metrics_address.port()),
+        ..Default::default()
+    }]);
     connector.readiness_probe = Some(marker_probe("/tmp/tunnellb-ready", 2, 2, 3));
     // The wrapper refreshes its own heartbeat during reconnection. Remote
     // availability therefore changes readiness without causing restart loops.

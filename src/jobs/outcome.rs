@@ -46,7 +46,7 @@ pub(super) fn phase(job: &Job) -> Phase {
     }
 }
 
-fn worker<'a>(job: &Job, pod: &'a Pod) -> Option<&'a ContainerStateTerminated> {
+pub(super) fn worker<'a>(job: &Job, pod: &'a Pod) -> Option<&'a ContainerStateTerminated> {
     let owner = job_reference(job).ok()?;
 
     if pod.uid().is_none_or(|uid| uid.is_empty())

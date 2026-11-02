@@ -36,6 +36,18 @@ use service::{is_managed, reconcile_service};
 
 #[derive(Args, Clone, Debug)]
 pub struct Config {
+    #[arg(
+        long,
+        env = "TUNNELLB_METRICS_ADDRESS",
+        default_value = "127.0.0.1:9090"
+    )]
+    pub metrics_address: SocketAddr,
+    #[arg(
+        long,
+        env = "TUNNELLB_CONNECTOR_METRICS_ADDRESS",
+        default_value = "0.0.0.0:9090"
+    )]
+    pub connector_metrics_address: SocketAddr,
     #[arg(long, env = "TUNNELLB_NAMESPACE", default_value = "tunnellb-system")]
     pub namespace: String,
     #[arg(
@@ -83,10 +95,12 @@ pub async fn run(config: Config) -> Result<()> {
         config.requeue_seconds > 0,
         "requeue seconds must be positive"
     );
+    let metrics = crate::metrics::listen(config.metrics_address).await?;
     let client = Client::try_default().await?;
     let context = Arc::new(Context {
         store: Store::new(client.clone(), config.namespace.clone()),
         resources: ResourceOptions {
+            metrics_address: config.connector_metrics_address,
             namespace: config.namespace.clone(),
             image: config.image.clone(),
             pull_policy: config.image_pull_policy.clone(),
@@ -191,6 +205,7 @@ pub async fn run(config: Config) -> Result<()> {
         _ = servers => {},
         _ = sweep => {},
         result = health => { result??; }
+        _ = metrics => { anyhow::bail!("metrics listener stopped"); }
     }
 
     healthy.store(false, Ordering::Relaxed);
@@ -217,6 +232,32 @@ async fn sweep_once(context: &Context) -> Result<()> {
         .list(&ListParams::default())
         .await?;
     let records = context.store.records("").await?;
+    observe_inventory(&servers.items, &records);
+
+    if let Ok(pods) = context
+        .api::<Pod>()
+        .list(&ListParams::default().labels("app.kubernetes.io/managed-by=tunnellb"))
+        .await
+    {
+        for pod in pods {
+            if let Some(publication) = pod.labels().get(crate::api::PUBLICATION_LABEL) {
+                let Some(status) = pod
+                    .status
+                    .as_ref()
+                    .and_then(|s| s.container_statuses.as_ref())
+                    .and_then(|statuses| statuses.iter().find(|c| c.name == "connector"))
+                else {
+                    continue;
+                };
+                crate::metrics::set(
+                    "tunnellb_connector_subprocess_restarts",
+                    &[("publication", publication)],
+                    f64::from(status.restart_count),
+                );
+            }
+        }
+    }
+
     for record in &records {
         let service_live = services.items.iter().any(|s| {
             is_managed(s) && s.uid().as_deref() == Some(record.publication.service.uid.as_str())
@@ -291,3 +332,51 @@ impl Context {
 
 #[cfg(test)]
 mod tests;
+
+fn observe_inventory(servers: &[Server], records: &[crate::store::PublicationRecord]) {
+    use crate::metrics;
+
+    metrics::clear_snapshot();
+    metrics::retain_enrollments(
+        &servers
+            .iter()
+            .map(ResourceExt::name_any)
+            .collect::<Vec<_>>(),
+    );
+
+    for server in servers {
+        let ready = server.status.as_ref().is_some_and(|s| s.phase == "Ready");
+        metrics::set(
+            "tunnellb_server_enrolled",
+            &[("server", &server.name_any())],
+            f64::from(ready),
+        );
+    }
+
+    for record in records {
+        let publication = &record.publication;
+        let labels = [
+            ("publication", publication.id.as_str()),
+            ("server", publication.server_name.as_str()),
+            ("service_namespace", publication.service.namespace.as_str()),
+            ("service", publication.service.name.as_str()),
+        ];
+        metrics::set(
+            "tunnellb_publication_provisioned",
+            &labels,
+            f64::from(
+                record.applied_hash.as_ref() == Some(&record.config_hash) && !record.removing,
+            ),
+        );
+
+        for port in &publication.service.ports {
+            let mut labels = labels.to_vec();
+            let number = port.port.to_string();
+            labels.extend([
+                ("protocol", port.protocol.frp_name()),
+                ("port", number.as_str()),
+            ]);
+            metrics::set("tunnellb_publication_info", &labels, 1.0);
+        }
+    }
+}

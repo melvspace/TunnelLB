@@ -33,7 +33,28 @@ pub(super) async fn reconcile_service(
     context: Arc<Context>,
 ) -> Result<Action, ReconcileError> {
     let _lock = context.serial.lock().await;
-    match service_inner(&service, &context).await {
+    let started = std::time::Instant::now();
+    let result = service_inner(&service, &context).await;
+    let reason = result
+        .as_ref()
+        .err()
+        .and_then(|e| e.downcast_ref::<jobs::Failure>())
+        .map_or(
+            if result.is_ok() {
+                "none"
+            } else {
+                "ReconcileFailed"
+            },
+            jobs::Failure::reason,
+        );
+    crate::metrics::operation(
+        "reconcile",
+        "service",
+        reason,
+        started.elapsed().as_secs_f64(),
+    );
+
+    match result {
         Ok(()) => Ok(if is_managed(&service) || has_finalizer(service.as_ref()) {
             context.action()
         } else {
@@ -269,6 +290,7 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
             Err(error) => return Err(error),
         };
         let publication = Publication {
+            frp_metrics: server.spec.frp_metrics,
             id,
             server_name: server.name_any(),
             server_uid,
@@ -411,7 +433,10 @@ async fn reconcile_assignments(
         }) == Some(record.publication.server_address);
         let duplicate = server.is_some_and(|m| duplicate_address(m, servers));
 
-        if !eligible || !same_allocation(&record.publication.service, request) {
+        if !eligible
+            || !same_allocation(&record.publication.service, request)
+            || server.is_some_and(|s| s.spec.frp_metrics != record.publication.frp_metrics)
+        {
             removing = true;
             cleanup_publication(record, context, false).await?;
         } else if duplicate || (unavailable && record.publication.service.ports != request.ports) {

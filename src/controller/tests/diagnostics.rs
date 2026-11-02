@@ -347,13 +347,13 @@ async fn enrollment_and_uninstall_keep_worker_diagnostics_and_server_phase() {
         (
             Operation::Enroll,
             r#"{"error":"ssh-authentication"}"#,
-            "SSHFailed",
+            "SSHAuthenticationFailed",
             format!("SSH Job retry limit exceeded; {}", Diagnostic::SshAuthentication),
         ),
         (
             Operation::Enroll,
             r#"{"error":"sudo"}"#,
-            "SSHFailed",
+            "RemoteSudoRequired",
             format!("SSH Job retry limit exceeded; {}", Diagnostic::RemoteSudo),
         ),
         (

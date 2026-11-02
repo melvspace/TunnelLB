@@ -84,7 +84,7 @@ pub fn server_config(publication: &Publication, credentials: &Credentials) -> Re
         .map(|port| json!({ "single": port }))
         .collect();
 
-    toml::to_string_pretty(&json!({
+    let mut config = json!({
         "bindAddr": "0.0.0.0",
         "bindPort": publication.control_port,
         "proxyBindAddr": "0.0.0.0",
@@ -99,8 +99,19 @@ pub fn server_config(publication: &Publication, credentials: &Credentials) -> Re
             },
         },
         "log": logging(),
-    }))
-    .context("serializing publication server configuration")
+    });
+
+    if publication.frp_metrics {
+        config["enablePrometheus"] = json!(true);
+        config["webServer"] = json!({
+            "addr": "::1",
+            "port": publication.control_port,
+            "user": "metrics",
+            "password": credentials.token,
+        });
+    }
+
+    toml::to_string_pretty(&config).context("serializing publication server configuration")
 }
 
 /// Generate frpc configuration to store in a Secret, never command-line flags.

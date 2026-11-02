@@ -5,6 +5,7 @@ fn publication(ledger: &mut Ledger, server: &Server) -> Publication {
     let service = service("a", &[(Protocol::Tcp, 443), (Protocol::Udp, 443)]);
     let control_port = ledger.allocate("a", &service, server).unwrap();
     Publication {
+        frp_metrics: false,
         id: "a".into(),
         server_name: server.metadata.name.clone().unwrap(),
         server_uid: server.metadata.uid.clone().unwrap(),

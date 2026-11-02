@@ -18,6 +18,7 @@ spec:
   template:
     metadata:
       labels:
+        tunnellb.io/metrics: "true"
         {{- include "tunnellb.controllerSelector" . | nindent 8 }}
     spec:
       serviceAccountName: tunnellb-controller
@@ -65,9 +66,16 @@ spec:
             - name: TUNNELLB_REQUEUE_SECONDS
               value: {{ .Values.requeueSeconds | quote }}
             {{- end }}
+            - name: TUNNELLB_METRICS_ADDRESS
+              value: {{ printf "%s:%v" (ternary "0.0.0.0" "127.0.0.1" .Values.metrics.enabled) .Values.metrics.port | quote }}
+            - name: TUNNELLB_CONNECTOR_METRICS_ADDRESS
+              value: {{ printf "0.0.0.0:%v" .Values.metrics.connectorPort | quote }}
             - name: RUST_LOG
               value: {{ .Values.logLevel | quote }}
           ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
             - name: health
               containerPort: 8080
               protocol: TCP

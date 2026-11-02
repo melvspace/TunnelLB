@@ -112,7 +112,67 @@ pub async fn run(
         }
     }
 
-    Ok(result(request, &job, &candidates))
+    let state = result(request, &job, &candidates);
+
+    if !matches!(state, State::Pending)
+        && crate::metrics::first_completion(&job.uid().unwrap_or_else(|| identity.name.clone()))
+    {
+        let operation = match request.operation {
+            provision::Operation::Enroll => "enroll",
+            provision::Operation::Reserve => "reserve",
+            provision::Operation::Apply => "apply",
+            provision::Operation::Remove => "remove",
+            provision::Operation::Uninstall => "uninstall",
+        };
+        let reason = match &state {
+            State::Failed(failure) => failure.reason(),
+            _ => "none",
+        };
+        let workers: Vec<_> = candidates
+            .iter()
+            .filter_map(|pod| super::outcome::worker(&job, pod))
+            .collect();
+        let seconds = workers
+            .iter()
+            .filter_map(|s| {
+                Some(
+                    (s.finished_at.as_ref()?.0.as_second() - s.started_at.as_ref()?.0.as_second())
+                        as f64,
+                )
+            })
+            .sum();
+
+        for worker in &workers {
+            let reason = if worker.exit_code == 0 {
+                "none"
+            } else {
+                worker
+                    .message
+                    .as_deref()
+                    .filter(|m| m.len() <= 4096)
+                    .and_then(|m| serde_json::from_str::<provision::FailureOutcome>(m).ok())
+                    .map_or("SSHFailed", |f| f.error.reason())
+            };
+            crate::metrics::add(
+                "tunnellb_ssh_attempts_total",
+                &[("operation", operation), ("reason", reason)],
+                1.0,
+            );
+        }
+
+        crate::metrics::operation("ssh", operation, reason, seconds);
+        tracing::info!(operation, server = %server.name_any(), publication = request.publication.as_ref().map(|p| p.id.as_str()).unwrap_or(""), service_namespace = request.publication.as_ref().map(|p| p.service.namespace.as_str()).unwrap_or(""), service = request.publication.as_ref().map(|p| p.service.name.as_str()).unwrap_or(""), reason, duration_seconds = seconds, "SSH operation completed");
+
+        if operation == "enroll" && reason == "none" && request.expected_known_hosts.is_some() {
+            crate::metrics::set(
+                "tunnellb_last_enrollment_success_timestamp_seconds",
+                &[("server", &server.name_any())],
+                crate::metrics::now(),
+            );
+        }
+    }
+
+    Ok(state)
 }
 
 /// A pending Job blocks new requests for this Server incarnation across

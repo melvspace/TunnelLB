@@ -110,6 +110,7 @@ fn status(code: u16, reason: &str) -> Value {
 fn record() -> PublicationRecord {
     PublicationRecord {
         publication: Publication {
+            frp_metrics: false,
             id: ID.into(),
             server_name: "edge".into(),
             server_uid: "server-uid".into(),
@@ -134,6 +135,7 @@ fn record() -> PublicationRecord {
             },
         },
         server_spec: ServerSpec {
+            frp_metrics: false,
             address: "203.0.113.10".into(),
             ssh: SshSpec {
                 user: "root".into(),

@@ -54,7 +54,6 @@ async fn supervise(
     let mut terminate = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;
 
-    crate::metrics::set("tunnellb_connector_registered", &[], 0.0);
     let mut process = Process::spawn(command)?;
     let (send, mut logs) = mpsc::channel::<Result<String>>(64);
     let stdout = process.child.stdout.take().context("missing FRP stdout")?;

@@ -244,6 +244,13 @@ fn serve(listener: tokio::net::TcpListener) -> tokio::task::JoinHandle<()> {
     })
 }
 
+/// Export zero baselines before the first scrape, without recording transitions.
+pub fn initialize_registration() {
+    set("tunnellb_connector_registered", &[], 0.0);
+    add("tunnellb_connector_registration_successes_total", &[], 0.0);
+    add("tunnellb_connector_registration_losses_total", &[], 0.0);
+}
+
 pub fn registration(registered: bool) {
     set("tunnellb_connector_registered", &[], f64::from(registered));
     let counter = if registered {
@@ -290,6 +297,11 @@ mod tests {
 
     #[test]
     fn recovery_and_loss_survive_between_scrapes() {
+        initialize_registration();
+        let baseline = render();
+        assert!(baseline.contains("tunnellb_connector_registered{} 0"));
+        assert!(baseline.contains("tunnellb_connector_registration_losses_total{} 0"));
+        assert!(baseline.contains("tunnellb_connector_registration_successes_total{} 0"));
         registration(true);
         registration(false);
         registration(true);

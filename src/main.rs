@@ -131,6 +131,7 @@ async fn dispatch(command: Command) -> Result<()> {
             ready,
             metrics_address,
         } => {
+            tunnellb::metrics::initialize_registration();
             let mut metrics = tunnellb::metrics::listen(metrics_address).await?;
             let result = tokio::select! {
                 result = connector::run(&config, &ready) => result,

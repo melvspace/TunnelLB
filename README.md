@@ -139,6 +139,7 @@ Add these settings to the Service's `metadata.annotations`:
 |---|---|---|
 | `tunnellb.io/servers` | `"edge-1,edge-2"` | Uses the specified servers. |
 | `tunnellb.io/pool` | `"public"` | Selects servers with `spec.pool: public`. |
+| `tunnellb.io/server-selector` | `"topology.kubernetes.io/region=region-a"` | Filters Server labels, optionally within a pool. |
 | `tunnellb.io/replicas` | `"2"` | Uses two servers instead of one. |
 | `tunnellb.io/proxy-protocol` | `"https=v2"` | Sends the client IP through PROXY protocol on the named port. |
 
@@ -148,6 +149,60 @@ Use PROXY protocol only if your application can read it.
 Without PROXY protocol, the application sees the tunnel connector's IP.
 
 See the [chart settings](charts/tunnellb/values.yaml) and [Server settings](examples/server.yaml) for more options.
+
+## Regional Server selection
+
+Label Server resources with operator-supplied regions and zones, independently of
+application pools. For example, an existing `edge-a-1` Server with
+`spec.pool: application` can have these labels:
+
+```sh
+kubectl label server edge-a-1 topology.kubernetes.io/region=region-a topology.kubernetes.io/zone=zone-a-1
+```
+
+A Service can request two servers in `region-a` within that pool:
+
+```yaml
+metadata:
+  annotations:
+    tunnellb.io/pool: "application"
+    tunnellb.io/server-selector: "topology.kubernetes.io/region=region-a"
+    tunnellb.io/replicas: "2"
+```
+
+`server-selector` uses Kubernetes label selector syntax: `=`, `==`, `!=`, `in`,
+`notin`, key existence (`key`), and key absence (`!key`). Comma-separated
+requirements are ANDed, for example
+`topology.kubernetes.io/region in (region-a,region-b),!maintenance`.
+Negative requirements (`!=`, `notin`) also match Servers missing the named label.
+An empty or malformed selector is rejected with `InvalidService`.
+Explicit `tunnellb.io/servers` cannot be combined with `server-selector` or `pool`;
+conflicting settings are rejected even if the named servers currently match.
+
+Selection always requires namespace opt-in and Server namespace authorization,
+and new allocations still require a ready, valid Server with a unique address
+and available public and control ports. The selector narrows these checks; it
+never expands a pool or grants access. Without `server-selector`, allocation
+behavior is unchanged.
+
+Existing assignments that remain eligible are retained, including when another
+matching Server becomes available. Adding or editing a selector does not restart
+an eligible publication. Server label updates trigger reconciliation. If a Server
+stops matching, TunnelLB stops and cleans up its publication before allocating a
+replacement; this interrupts connections on that edge and may change the public
+IP. A label change alone does not move assignments that still match. Existing
+assignments retain the usual readiness and backend outage behavior.
+
+When a valid selector cannot supply the requested replicas, `TunnelLBReady=False`
+has reason `ServerSelectorUnsatisfied` and reports allocated versus requested
+replicas. This includes zero matching or eligible Servers, unready Servers, and
+port exhaustion. Available assignments continue serving and retain their
+published IPs while TunnelLB retries. Provisioning or backend failures can report
+their own more specific condition reasons.
+
+Regions are labels, not IP geolocation. ExternalDNS remains responsible for A/SRV
+records; regional selection does not install DNS or monitoring infrastructure,
+check application health, or provide automatic DNS failover.
 
 ## Use one server with several clusters
 

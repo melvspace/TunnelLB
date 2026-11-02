@@ -139,6 +139,8 @@ pub struct ServiceRequest {
     pub selector: BTreeMap<String, String>,
     pub ports: Vec<PublishedPort>,
     pub servers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_selector: Option<crate::validation::ServerSelector>,
     pub pool: Option<String>,
     pub replicas: u16,
 }

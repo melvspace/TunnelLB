@@ -3,6 +3,7 @@
 mod backends;
 mod primitives;
 mod server;
+mod server_selector;
 mod service;
 
 #[cfg(test)]
@@ -12,6 +13,7 @@ use thiserror::Error;
 
 pub use backends::validate_backends;
 pub use server::validate_server;
+pub use server_selector::ServerSelector;
 pub use service::service_request;
 
 /// Callers can downcast `anyhow::Error` to distinguish absence from unsafe input.

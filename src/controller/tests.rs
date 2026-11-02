@@ -32,6 +32,7 @@ const TENANT: &str = "application";
 
 mod diagnostics;
 mod reservations;
+mod selectors;
 
 struct Exchange {
     method: &'static str,

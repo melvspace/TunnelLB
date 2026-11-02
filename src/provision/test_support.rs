@@ -53,6 +53,7 @@ pub(super) fn request(operation: Operation) -> Request {
             ],
             servers: vec!["edge".into()],
             pool: None,
+            server_selector: None,
             replicas: 1,
         },
     };

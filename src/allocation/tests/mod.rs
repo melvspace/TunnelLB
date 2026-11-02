@@ -45,6 +45,7 @@ fn service(uid: &str, ports: &[(Protocol, u16)]) -> ServiceRequest {
             })
             .collect(),
         servers: vec!["edge".into()],
+        server_selector: None,
         pool: None,
         replicas: 1,
     }

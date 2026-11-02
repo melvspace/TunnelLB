@@ -545,3 +545,69 @@ async fn healthy_publications_reconcile_remote_rules_and_preserve_connectors_on_
         assert!(queue.lock().unwrap().is_empty());
     }
 }
+
+#[tokio::test]
+async fn adding_server_selector_preserves_publication_and_reports_replica_shortfalls() {
+    for replicas in [1, 2] {
+        let (context, _) = mock(vec![]);
+        let mut previous = record();
+        previous.config_hash = publication_hash(&previous.publication, &context.resources).unwrap();
+        previous.applied_hash = Some(previous.config_hash.clone());
+        previous.credential_generation = Some(crate::transport::credential_generation(
+            "synthetic-certificate",
+        ));
+        let mut service = service();
+        service.metadata.annotations = Some(BTreeMap::from([
+            (
+                "tunnellb.io/server-selector".into(),
+                "region=region-a".into(),
+            ),
+            ("tunnellb.io/replicas".into(), replicas.to_string()),
+        ]));
+        let mut desired = previous.clone();
+        desired.publication.service.server_selector = Some("region=region-a".parse().unwrap());
+        desired.publication.service.replicas = replicas;
+        let mut server = assigned_server(&previous);
+        server.metadata.labels = Some(BTreeMap::from([("region".into(), "region-a".into())]));
+        let mut exchanges = ready_backend(&previous, &service, &[server]);
+        exchanges.extend(save_record(&previous, &desired, 200));
+        let mut reads = publication_reads(&desired, true);
+        reads.remove(0);
+        exchanges.extend(reads);
+        exchanges.extend(worker_job(Operation::Apply, Some(&desired), None));
+        exchanges.extend(healthy_connector(&desired));
+        exchanges.push(Exchange::inspect(
+            "PATCH",
+            format!("/api/v1/namespaces/{TENANT}/services/web/status"),
+            200,
+            move |body| {
+                let condition = &body["status"]["conditions"][0];
+                assert_eq!(
+                    condition["status"],
+                    if replicas == 1 { "True" } else { "False" }
+                );
+                assert_eq!(
+                    condition["reason"],
+                    if replicas == 1 {
+                        "Published"
+                    } else {
+                        "ServerSelectorUnsatisfied"
+                    }
+                );
+                assert_eq!(
+                    body["status"]["loadBalancer"]["ingress"][0]["ip"],
+                    "8.8.8.8"
+                );
+
+                if replicas == 2 {
+                    assert!(condition["message"].as_str().unwrap().contains("1 of 2"));
+                }
+
+                body
+            },
+        ));
+        let (context, queue) = mock(exchanges);
+        service_inner(&service, &context).await.unwrap();
+        assert!(queue.lock().unwrap().is_empty());
+    }
+}

@@ -43,23 +43,10 @@ jobs:
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
-          toolchain: "1.97.1"
           components: rustfmt, clippy
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run Clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
-
-      - name: Run tests
-        run: cargo test --locked --all-features
-
-      - name: Check generated CRD consistency
-        run: |
-          mkdir -p /tmp/codex
-          cargo run --locked -- crd > /tmp/codex/servers.yaml
-          diff -u charts/tunnellb/crds/servers.yaml /tmp/codex/servers.yaml
+      - name: Verify Rust and generated CRD
+        run: ./scripts/verify.sh rust
 
   helm:
     name: Helm chart validation
@@ -77,15 +64,5 @@ jobs:
         with:
           version: v4.3.1
 
-      # The API server CIDR is an offline validation fixture only.
-      - name: Lint Helm chart
-        run: |
-          helm lint charts/tunnellb --strict \
-            --namespace tunnellb-system \
-            --set 'networkPolicy.apiServerCIDRs[0]=192.0.2.1/32'
-
-      - name: Render Helm chart
-        run: |
-          helm template tunnellb charts/tunnellb --include-crds \
-            --namespace tunnellb-system \
-            --set 'networkPolicy.apiServerCIDRs[0]=192.0.2.1/32' > /dev/null
+      - name: Verify Helm chart
+        run: ./scripts/verify.sh helm

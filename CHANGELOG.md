@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.1](https://github.com/melvspace/TunnelLB/compare/v0.2.0...v0.2.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **controller:** reconcile remote rules for healthy publications ([eaef9b6](https://github.com/melvspace/TunnelLB/commit/eaef9b666590ffecd5fd9fe7baefb1c3ad736bdb))
+* **provision:** allow hosts with k3s or Tailscale ([41e4e58](https://github.com/melvspace/TunnelLB/commit/41e4e5820674094c373f542350f7704af4aa5876))
+* **provision:** preserve actionable worker diagnostics ([39d254e](https://github.com/melvspace/TunnelLB/commit/39d254e6a1d73444594c44e356a7ad6923118cb0))
+
 ## [0.2.0](https://github.com/melvspace/TunnelLB/compare/v0.1.0...v0.2.0) (2026-10-20)
 
 

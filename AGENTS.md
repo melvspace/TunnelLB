@@ -1,2 +1,3 @@
 - [CODING_STANDARDS.md]
 - Write human-readable code. All the changes will be reviewed by Human.
+- Before completing repository changes, run `./scripts/verify.sh` after the final edit. Fix failures caused by your changes and rerun verification. Report the result and any checks that could not run; claim success only for checks actually executed.

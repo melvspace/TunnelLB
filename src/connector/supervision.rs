@@ -88,6 +88,7 @@ async fn supervise(
                 registrations.observe(&line);
 
                 if registrations.ready() != was_ready {
+                    crate::metrics::registration(registrations.ready());
                     tracing::info!(registered = registrations.ready(), "FRP registration state changed");
                 }
 

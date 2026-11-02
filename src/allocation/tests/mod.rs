@@ -19,7 +19,7 @@ fn server() -> Server {
             reserved_ports: Vec::new(),
             control_port_range: PortRange {
                 start: 20000,
-                end: 20003,
+                end: 20007,
             },
         },
     );

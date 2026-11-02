@@ -107,6 +107,8 @@ fn mock(exchanges: Vec<Exchange>) -> (Arc<Context>, Arc<StdMutex<VecDeque<Exchan
     });
     let client = Client::new(service, "wrong-default-namespace");
     let config = Config {
+        metrics_address: "127.0.0.1:0".parse().unwrap(),
+        connector_metrics_address: "0.0.0.0:9090".parse().unwrap(),
         namespace: OPERATOR.into(),
         image: "tunnellb:test".into(),
         image_pull_policy: "IfNotPresent".into(),
@@ -120,6 +122,7 @@ fn mock(exchanges: Vec<Exchange>) -> (Arc<Context>, Arc<StdMutex<VecDeque<Exchan
         Arc::new(Context {
             store: Store::new(client.clone(), config.namespace.clone()),
             resources: ResourceOptions {
+                metrics_address: "0.0.0.0:9090".parse().unwrap(),
                 namespace: config.namespace.clone(),
                 image: config.image.clone(),
                 pull_policy: config.image_pull_policy.clone(),
@@ -171,7 +174,7 @@ fn record() -> PublicationRecord {
         "publication": {
             "id": publication_id("service-uid", "server-uid"),
             "serverName": "edge", "serverUid": "server-uid",
-            "serverAddress": "8.8.8.8", "controlPort": 20000,
+            "serverAddress": "8.8.8.8", "controlPort": 20000, "frpMetrics": true,
             "service": {
                 "namespace": TENANT, "name": "web", "uid": "service-uid",
                 "clusterIp": "10.96.1.10", "selector": {"app": "web"},
@@ -418,23 +421,26 @@ fn condition(service: &Service, reason: &'static str, retains_ips: bool) -> Exch
 
 #[tokio::test]
 async fn unavailable_backends_keep_an_unchanged_connector_and_publication() {
-    let record = record();
-    let service = service();
-    let mut exchanges = unavailable_backend(&record, &[assigned_server(&record)]);
-    exchanges.push(Exchange::get(
-        path("deployments", &record.publication.id),
-        json!({
-            "spec": {
-                "selector": {},
-                "template": {"metadata": {"annotations": {"tunnellb.io/config-hash": record.config_hash}}},
-            },
-        }),
-    ));
-    exchanges.push(condition(&service, "BackendUnavailable", true));
-    let (context, queue) = mock(exchanges);
-    service_inner(&service, &context).await.unwrap();
-    // No Deployment, lease, credential, or publication-record mutation.
-    assert!(queue.lock().unwrap().is_empty());
+    for frp_metrics in [false, true] {
+        let mut record = record();
+        record.publication.frp_metrics = frp_metrics;
+        let service = service();
+        let mut exchanges = unavailable_backend(&record, &[assigned_server(&record)]);
+        exchanges.push(Exchange::get(
+            path("deployments", &record.publication.id),
+            json!({
+                "spec": {
+                    "selector": {},
+                    "template": {"metadata": {"annotations": {"tunnellb.io/config-hash": record.config_hash}}},
+                },
+            }),
+        ));
+        exchanges.push(condition(&service, "BackendUnavailable", true));
+        let (context, queue) = mock(exchanges);
+        service_inner(&service, &context).await.unwrap();
+        // No Deployment, lease, credential, or publication-record mutation.
+        assert!(queue.lock().unwrap().is_empty());
+    }
 }
 
 #[tokio::test]
@@ -956,4 +962,60 @@ async fn missing_record_allocation_recovery_propagates_api_errors_without_fallba
         // accepting a new reservation or reporting AllocationPending.
         assert!(queue.lock().unwrap().is_empty());
     }
+}
+
+#[tokio::test]
+async fn new_publications_persist_private_metrics_without_a_server_option() {
+    let service = service();
+    let record = record();
+    let server = assigned_server(&record);
+    let mut exchanges = ready_backend(&record, &service, &[server]);
+    exchanges[0] = Exchange::get(path("configmaps", ""), list("ConfigMap", vec![]));
+    let ledger_name = format!(
+        "ports-{}",
+        &hex::encode(Sha256::digest(b"server-uid"))[..20]
+    );
+    exchanges.extend([
+        Exchange::reply(
+            "GET",
+            path("configmaps", &record.publication.id),
+            404,
+            status(404),
+        ),
+        Exchange::reply("GET", path("configmaps", &ledger_name), 404, status(404)),
+        Exchange::inspect("POST", path("configmaps", ""), 201, |body| {
+            let ledger: crate::allocation::Ledger =
+                serde_json::from_str(body["data"]["ledger.json"].as_str().unwrap()).unwrap();
+            assert!(ledger.allocations.values().all(|lease| lease.frp_metrics));
+
+            body
+        }),
+        Exchange::reply(
+            "GET",
+            path("configmaps", &record.publication.id),
+            404,
+            status(404),
+        ),
+        Exchange::inspect("POST", path("configmaps", ""), 503, |body| {
+            let saved: PublicationRecord =
+                serde_json::from_str(body["data"]["record.json"].as_str().unwrap()).unwrap();
+            assert!(saved.publication.frp_metrics);
+            let credentials = crate::transport::credentials(&saved.publication).unwrap();
+            let config: toml::Value = toml::from_str(
+                &crate::transport::server_config(&saved.publication, &credentials).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(config["webServer"]["addr"].as_str(), Some("::1"));
+            assert_eq!(config["enablePrometheus"].as_bool(), Some(true));
+
+            status(503)
+        }),
+    ]);
+    let (context, queue) = mock(exchanges);
+    let error = service_inner(&service, &context).await.unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<kube::Error>(),
+        Some(kube::Error::Api(error)) if error.code == 503
+    ));
+    assert!(queue.lock().unwrap().is_empty());
 }

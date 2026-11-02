@@ -26,6 +26,7 @@ pub(super) fn host_key(address: Ipv4Addr, port: u16, seed: u8) -> String {
 pub(super) fn request(operation: Operation) -> Request {
     let address = "203.0.113.7".parse().unwrap();
     let publication = Publication {
+        frp_metrics: false,
         id: "pub-0123".into(),
         server_name: "edge".into(),
         server_uid: "server-uid".into(),

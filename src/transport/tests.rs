@@ -3,6 +3,7 @@ use crate::api::{PublishedPort, ServiceRequest};
 
 fn publication() -> Publication {
     Publication {
+        frp_metrics: false,
         id: "pub-0123456789abcdef".into(),
         server_name: "edge".into(),
         server_uid: "c4a082c0-06f0-4b14-bf90-f5d975cbbf92".into(),
@@ -314,4 +315,28 @@ fn untrusted_metadata_is_never_rendered_and_reordering_is_stable() {
     );
     assert!(!original_client.contains("{{"));
     assert!(!original_server.contains("{{"));
+}
+
+#[test]
+fn legacy_publications_keep_their_listener_layout_and_metrics_are_private() {
+    let mut publication = publication();
+    let credentials = credentials(&publication).unwrap();
+    let disabled: toml::Value =
+        toml::from_str(&server_config(&publication, &credentials).unwrap()).unwrap();
+    assert!(disabled.get("webServer").is_none());
+    publication.frp_metrics = true;
+    let first: toml::Value =
+        toml::from_str(&server_config(&publication, &credentials).unwrap()).unwrap();
+    assert_eq!(first["webServer"]["addr"].as_str(), Some("::1"));
+    assert_eq!(first["webServer"]["port"].as_integer(), Some(23457));
+    assert_eq!(first["enablePrometheus"].as_bool(), Some(true));
+    assert_eq!(
+        first["webServer"]["password"].as_str(),
+        Some(credentials.token.as_str())
+    );
+    publication.control_port += 1;
+    let second: toml::Value =
+        toml::from_str(&server_config(&publication, &credentials).unwrap()).unwrap();
+    assert_ne!(first["webServer"]["port"], second["webServer"]["port"]);
+    assert_eq!(second["bindAddr"].as_str(), Some("0.0.0.0"));
 }

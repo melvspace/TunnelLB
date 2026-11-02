@@ -162,10 +162,21 @@ pub struct ValidatedService {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Publication {
+    /// New publications always provision metrics; false preserves legacy listeners.
+    #[serde(default)]
+    pub frp_metrics: bool,
     pub id: String,
     pub server_name: String,
     pub server_uid: String,
     pub server_address: Ipv4Addr,
     pub control_port: u16,
     pub service: ServiceRequest,
+}
+
+impl Publication {
+    pub fn metrics_port(&self) -> Option<u16> {
+        self.frp_metrics
+            .then(|| self.control_port.checked_add(1))
+            .flatten()
+    }
 }

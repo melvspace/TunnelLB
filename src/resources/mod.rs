@@ -20,6 +20,7 @@ const SSH_JOB_LABEL: &str = "tunnellb.io/ssh-job";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceOptions {
+    pub metrics_address: std::net::SocketAddr,
     /// Namespace containing the workloads, their policies, and all mounted Secrets.
     pub namespace: String,
     pub image: String,

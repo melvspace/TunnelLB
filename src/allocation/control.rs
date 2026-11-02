@@ -4,6 +4,32 @@ use anyhow::{Context, Result, ensure};
 use std::{collections::BTreeSet, net::Ipv4Addr};
 
 impl Ledger {
+    /// Rebuild a missing lease at its persisted control port. An existing lease
+    /// may already contain a host-confirmed port that has not reached the record.
+    pub(crate) fn restore(&mut self, server: &Server, publication: &Publication) -> Result<u16> {
+        let mut next = self.clone();
+        let missing = !next.allocations.contains_key(&publication.id);
+        let control = next.allocate_with_metrics(
+            &publication.id,
+            &publication.service,
+            server,
+            publication.frp_metrics,
+        )?;
+
+        if missing {
+            // Validate the persisted selection through the same collision and
+            // policy checks used for host confirmation, before committing it.
+            let mut provisional = publication.clone();
+            provisional.control_port = control;
+            next.confirm_control(server, &provisional, publication.control_port)?;
+        }
+
+        let restored = next.allocations[&publication.id].control_port;
+        *self = next;
+
+        Ok(restored)
+    }
+
     /// Numbers unavailable to the host's control-port selection. The existing
     /// control is deliberately omitted unless current Server policy excludes it.
     pub(crate) fn control_exclusions(
@@ -41,6 +67,7 @@ impl Ledger {
 
             if id != &publication.id {
                 exclusions.insert(existing.control_port);
+                exclusions.extend(existing.metrics_port());
             }
         }
 
@@ -60,6 +87,13 @@ impl Ledger {
         ensure!(
             control_port != 0 && (range.start..=range.end).contains(&control_port),
             "selected TCP control port {control_port} is outside the Server range"
+        );
+        ensure!(
+            !publication.frp_metrics
+                || control_port.checked_add(1).is_some_and(|metrics| {
+                    metrics <= range.end && !exclusions.contains(&metrics)
+                }),
+            "selected monitoring port is unavailable"
         );
         ensure!(
             !exclusions.contains(&control_port),
@@ -118,6 +152,7 @@ impl Ledger {
                 && allocation.server_uid == publication.server_uid
                 && allocation.server_address == publication.server_address
                 && allocation.ports == ports
+                && allocation.frp_metrics == publication.frp_metrics
                 && ports.len() == publication.service.ports.len(),
             "publication allocation has a different owner, Server or reservation set"
         );

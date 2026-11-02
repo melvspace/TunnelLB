@@ -7,10 +7,10 @@ fn idempotent_retries_preserve_control_even_when_a_lower_port_is_free() {
     let a = service("a", &[(Protocol::Tcp, 443)]);
     let b = service("b", &[(Protocol::Tcp, 8080), (Protocol::Udp, 53)]);
     ledger.allocate("a", &a, &server).unwrap();
-    assert_eq!(ledger.allocate("b", &b, &server).unwrap(), 20001);
+    assert_eq!(ledger.allocate("b", &b, &server).unwrap(), 20002);
     ledger.release("a");
     let before = ledger.clone();
-    assert_eq!(ledger.allocate("b", &b, &server).unwrap(), 20001);
+    assert_eq!(ledger.allocate("b", &b, &server).unwrap(), 20002);
     assert_eq!(ledger, before);
     let mut updated = b;
     updated.ports.reverse();
@@ -21,7 +21,7 @@ fn idempotent_retries_preserve_control_even_when_a_lower_port_is_free() {
     updated.servers.clear();
     updated.pool = Some("pool".into());
     updated.replicas = 3;
-    assert_eq!(ledger.allocate("b", &updated, &server).unwrap(), 20001);
+    assert_eq!(ledger.allocate("b", &updated, &server).unwrap(), 20002);
     assert_eq!(ledger, before);
 }
 
@@ -92,7 +92,7 @@ fn address_aliases_and_recreated_server_objects_share_collision_scope() {
         ledger
             .allocate("alias", &service("b", &[(Protocol::Udp, 8080)]), &alias)
             .unwrap(),
-        20001
+        20002
     );
 
     let mut recreated = original.clone();
@@ -148,7 +148,7 @@ fn aliases_cannot_bypass_each_others_ssh_or_administrator_exclusions() {
         ledger
             .allocate("alias", &service("b", &[(Protocol::Tcp, 8080)]), &alias)
             .unwrap(),
-        20002
+        20004
     );
 }
 

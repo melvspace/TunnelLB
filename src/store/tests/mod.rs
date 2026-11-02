@@ -110,6 +110,7 @@ fn status(code: u16, reason: &str) -> Value {
 fn record() -> PublicationRecord {
     PublicationRecord {
         publication: Publication {
+            frp_metrics: true,
             id: ID.into(),
             server_name: "edge".into(),
             server_uid: "server-uid".into(),

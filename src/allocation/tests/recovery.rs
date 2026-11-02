@@ -131,11 +131,11 @@ fn restored_leases_keep_exact_protocol_ownership_and_existing_control() {
                 &server,
             )
             .unwrap();
-        assert_eq!(ledger.allocate("a", &original, &server).unwrap(), 20001);
+        assert_eq!(ledger.allocate("a", &original, &server).unwrap(), 20002);
         ledger.release("filler");
         let encoded = serde_json::to_string(&ledger).unwrap();
         let mut restored: Ledger = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(restored.allocate("a", &original, &server).unwrap(), 20001);
+        assert_eq!(restored.allocate("a", &original, &server).unwrap(), 20002);
         assert_eq!(restored, ledger);
 
         if protocols.len() == 1 {
@@ -175,7 +175,7 @@ fn serialized_cross_protocol_overlaps_are_not_grandfathered_on_retry() {
         // Explicit release after revocation permits the remaining lease,
         // without stealing or silently changing its existing control port.
         restored.release("a");
-        assert_eq!(restored.allocate("b", &b, &server).unwrap(), 20001);
+        assert_eq!(restored.allocate("b", &b, &server).unwrap(), 20002);
     }
 }
 
@@ -209,4 +209,50 @@ fn invalid_stored_reservations_are_not_treated_as_available() {
         &self::service("b", &[(Protocol::Tcp, 8080)]),
         &server,
     );
+}
+
+#[test]
+fn legacy_leases_keep_their_socket_layout_until_unpublished_replacement() {
+    let server = server();
+    let request = service("a", &[(Protocol::Tcp, 443)]);
+    let mut ledger = Ledger::default();
+    ledger.allocate("a", &request, &server).unwrap();
+    assert!(ledger.allocations["a"].frp_metrics);
+    let before = ledger.clone();
+    assert!(
+        ledger
+            .allocate_with_metrics("a", &request, &server, false)
+            .is_err()
+    );
+    assert_eq!(ledger, before);
+
+    for omitted in [false, true] {
+        let mut encoded = serde_json::to_value(&ledger).unwrap();
+        let allocation = encoded["allocations"]["a"].as_object_mut().unwrap();
+
+        if omitted {
+            allocation.remove("frpMetrics");
+        } else {
+            allocation.insert("frpMetrics".into(), false.into());
+        }
+
+        let mut restored: Ledger = serde_json::from_value(encoded).unwrap();
+        let other = service("b", &[(Protocol::Tcp, 20001)]);
+        assert_eq!(restored.allocate("b", &other, &server).unwrap(), 20002);
+        assert!(restored.allocations["b"].frp_metrics);
+        let before = restored.clone();
+        assert_eq!(restored.allocate("a", &request, &server).unwrap(), 20000);
+        assert_eq!(restored, before);
+        assert!(!restored.allocations["a"].frp_metrics);
+
+        // Only a reservation with no publication record may change its sockets.
+        assert_eq!(
+            restored
+                .allocate_unpublished("a", &request, &server)
+                .unwrap(),
+            20004
+        );
+        assert!(restored.allocations["a"].frp_metrics);
+        assert_eq!(restored.allocations["b"], before.allocations["b"]);
+    }
 }

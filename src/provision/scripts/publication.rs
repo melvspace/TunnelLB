@@ -22,9 +22,10 @@ pub(super) fn publication_vars(request: &Request) -> Result<String> {
         .context("credential generation is required")?;
 
     Ok(format!(
-        "publication={}\ngeneration={}\npub=\"$owned/publications/$publication\"\nunit=\"tunnellb-$owner@$publication.service\"\n",
+        "publication={}\ngeneration={}\nfrp_metrics={}\npub=\"$owned/publications/$publication\"\nunit=\"tunnellb-$owner@$publication.service\"\n",
         shell_quote(&publication.id),
-        shell_quote(generation)
+        shell_quote(generation),
+        publication.frp_metrics,
     ))
 }
 
@@ -53,7 +54,7 @@ check_generation_not_revoked
 check_owner; check_binary_owner; check_template
 read_own_claim
 [ -n "$claim_generation" ] || fail reservation-required
-[ "$claim_generation" = "$generation" ] && [ "$claim_control" = "$control_port" ] && [ "$claim_public" = "$public_ports" ] || fail reservation-conflict
+[ "$claim_generation" = "$generation" ] && [ "$claim_control" = "$control_port" ] && [ "$claim_public" = "$(claimed_ports "$control_port")" ] || fail reservation-conflict
 read_current_generation
 [ -z "$current_generation" ] || [ "$current_generation" = "$generation" ] || fail generation-conflict
 [ -z "$current_configuration_hash" ] || [ "$current_configuration_hash" = "$configuration_hash" ] || fail generation-conflict
@@ -110,7 +111,7 @@ check_port() {
 }
 "#);
     script.push_str(r#"
-for number in $public_ports "$control_port"; do
+for number in $claim_public "$control_port"; do
     check_port tcp "$number"
     check_port udp "$number"
 done

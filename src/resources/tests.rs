@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 fn options() -> ResourceOptions {
     ResourceOptions {
+        metrics_address: "0.0.0.0:9090".parse().unwrap(),
         namespace: "tunnellb-system".into(),
         image: "example.test/tunnellb:v1.0.0".into(),
         pull_policy: "IfNotPresent".into(),
@@ -15,6 +16,7 @@ fn options() -> ResourceOptions {
 
 fn publication() -> Publication {
     Publication {
+        frp_metrics: false,
         id: "publication-123".into(),
         server_name: "edge-one".into(),
         server_uid: "server-uid".into(),

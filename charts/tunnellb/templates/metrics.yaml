@@ -1,0 +1,78 @@
+{{- if and .Values.metrics.podMonitor.enabled (not .Values.metrics.enabled) }}
+{{- fail "metrics.podMonitor.enabled requires metrics.enabled" }}
+{{- end }}
+{{- if .Values.metrics.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: tunnellb-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tunnellb.labels" $ | nindent 4 }}
+spec:
+  selector:
+    {{- include "tunnellb.controllerSelector" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: {{ .Values.metrics.port }}
+      targetPort: metrics
+{{- range $target := list "controller" "connector" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tunnellb-metrics-{{ $target }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  podSelector:
+    {{- if eq $target "controller" }}
+    matchLabels:
+      {{- include "tunnellb.controllerSelector" $ | nindent 6 }}
+    {{- else }}
+    matchExpressions:
+      - key: tunnellb.io/publication
+        operator: Exists
+    {{- end }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $.Values.metrics.scraperNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $.Values.metrics.scraperPodSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: metrics
+{{- end }}
+{{- if .Values.metrics.podMonitor.enabled }}
+{{- range $target := list "controller" "connector" }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: tunnellb-{{ $target }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "tunnellb.labels" $ | nindent 4 }}
+    {{- with $.Values.metrics.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    {{- if eq $target "controller" }}
+    matchLabels:
+      {{- include "tunnellb.controllerSelector" $ | nindent 6 }}
+    {{- else }}
+    matchExpressions:
+      - key: tunnellb.io/publication
+        operator: Exists
+    {{- end }}
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ $.Values.metrics.podMonitor.interval }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -29,10 +29,12 @@ pub(super) fn phase(job: &Job) -> Phase {
     };
 
     let conditions = status.conditions.as_deref().unwrap_or_default();
+    // FailureTarget precedes worker termination; wait for final diagnostics
+    // before advancing reconciliation or deduplicating completion metrics.
 
     if conditions
         .iter()
-        .any(|c| c.status == "True" && matches!(c.type_.as_str(), "Failed" | "FailureTarget"))
+        .any(|c| c.status == "True" && c.type_ == "Failed")
     {
         Phase::Failed
     } else if conditions
@@ -46,7 +48,7 @@ pub(super) fn phase(job: &Job) -> Phase {
     }
 }
 
-fn worker<'a>(job: &Job, pod: &'a Pod) -> Option<&'a ContainerStateTerminated> {
+pub(super) fn worker<'a>(job: &Job, pod: &'a Pod) -> Option<&'a ContainerStateTerminated> {
     let owner = job_reference(job).ok()?;
 
     if pod.uid().is_none_or(|uid| uid.is_empty())
@@ -162,6 +164,19 @@ fn valid_allocation(
                     let range = reservation.control_port_range;
                     (range.start..=range.end).contains(control_port)
                         && !reservation.excluded_ports.contains(control_port)
+                        && request.publication.as_ref().is_some_and(|publication| {
+                            !publication.frp_metrics
+                                || control_port.checked_add(1).is_some_and(|metrics| {
+                                    metrics <= range.end
+                                        && metrics != request.ssh_port
+                                        && !reservation.excluded_ports.contains(&metrics)
+                                        && publication
+                                            .service
+                                            .ports
+                                            .iter()
+                                            .all(|port| port.port != metrics)
+                                })
+                        })
                 })
                 && request.publication.as_ref().is_some_and(|publication| {
                     publication

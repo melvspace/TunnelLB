@@ -27,7 +27,28 @@ pub(super) async fn reconcile_server(
     context: Arc<Context>,
 ) -> Result<Action, ReconcileError> {
     let _lock = context.serial.lock().await;
-    match server_inner(&server, &context).await {
+    let started = std::time::Instant::now();
+    let result = server_inner(&server, &context).await;
+    let reason = result
+        .as_ref()
+        .err()
+        .and_then(|e| e.downcast_ref::<jobs::Failure>())
+        .map_or(
+            if result.is_ok() {
+                "none"
+            } else {
+                "ReconcileFailed"
+            },
+            jobs::Failure::reason,
+        );
+    crate::metrics::operation(
+        "reconcile",
+        "server",
+        reason,
+        started.elapsed().as_secs_f64(),
+    );
+
+    match result {
         Ok(()) => Ok(context.action()),
         Err(error) => {
             let failure = error.downcast_ref::<jobs::Failure>();

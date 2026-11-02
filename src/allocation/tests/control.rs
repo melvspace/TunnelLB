@@ -5,6 +5,7 @@ fn publication(ledger: &mut Ledger, server: &Server) -> Publication {
     let service = service("a", &[(Protocol::Tcp, 443), (Protocol::Udp, 443)]);
     let control_port = ledger.allocate("a", &service, server).unwrap();
     Publication {
+        frp_metrics: true,
         id: "a".into(),
         server_name: server.metadata.name.clone().unwrap(),
         server_uid: server.metadata.uid.clone().unwrap(),
@@ -27,13 +28,13 @@ fn exclusions_preserve_local_numbers_and_policy_but_omit_our_control() {
     server.spec.reserved_ports = vec![9443];
     server.spec.ssh.port = 2222;
     // After confirmation, the record may still contain the provisional control.
-    ledger.allocations.get_mut("a").unwrap().control_port = 20003;
+    ledger.allocations.get_mut("a").unwrap().control_port = 20004;
     publication.service.ports.reverse();
     publication.service.ports[0].name = "renamed".into();
     let before = ledger.clone();
     assert_eq!(
         ledger.control_exclusions(&server, &publication).unwrap(),
-        vec![22, 53, 443, 2222, 8080, 8443, 9443, 20001]
+        vec![22, 53, 443, 2222, 8080, 8443, 9443, 20002, 20003]
     );
     assert_eq!(ledger, before);
 }
@@ -47,18 +48,18 @@ fn confirmation_changes_only_control_and_retries_a_stale_record() {
         .allocate("b", &service("b", &[(Protocol::Tcp, 8443)]), &server)
         .unwrap();
     let mut expected = ledger.clone();
-    expected.allocations.get_mut("a").unwrap().control_port = 20003;
+    expected.allocations.get_mut("a").unwrap().control_port = 20004;
     ledger
-        .confirm_control(&server, &publication, 20003)
+        .confirm_control(&server, &publication, 20004)
         .unwrap();
     assert_eq!(ledger, expected);
     ledger
-        .confirm_control(&server, &publication, 20003)
+        .confirm_control(&server, &publication, 20004)
         .unwrap();
     assert_eq!(ledger, expected);
     assert_eq!(
         ledger.allocate("a", &publication.service, &server).unwrap(),
-        20003
+        20004
     );
 }
 
@@ -89,7 +90,7 @@ fn confirmation_rejects_invalid_or_occupied_controls_without_mutation() {
     let before = ledger.clone();
     assert!(
         ledger
-            .confirm_control(&server, &publication, 20003)
+            .confirm_control(&server, &publication, 20004)
             .is_err()
     );
     assert_eq!(ledger, before, "a third control must not be overwritten");
@@ -179,9 +180,79 @@ fn corrupt_ledgers_and_invalid_server_policy_cannot_be_confirmed() {
         assert!(candidate.control_exclusions(&server, &publication).is_err());
         assert!(
             candidate
-                .confirm_control(&server, &publication, 20003)
+                .confirm_control(&server, &publication, 20004)
                 .is_err()
         );
         assert_eq!(candidate, before, "failed confirmation of {problem}");
+    }
+}
+
+#[test]
+fn monitoring_reserves_adjacent_ports_and_rejects_collisions() {
+    let mut server = server();
+    let mut ledger = Ledger::default();
+    let first = service("a", &[(Protocol::Tcp, 443)]);
+    assert_eq!(ledger.allocate("a", &first, &server).unwrap(), 20000);
+    assert!(
+        ledger
+            .allocate("b", &service("b", &[(Protocol::Udp, 20001)]), &server)
+            .is_err()
+    );
+    assert_eq!(
+        ledger
+            .allocate("b", &service("b", &[(Protocol::Tcp, 8443)]), &server)
+            .unwrap(),
+        20002
+    );
+    server.spec.control_port_range.end = 20004;
+    assert!(
+        ledger
+            .allocate("c", &service("c", &[(Protocol::Tcp, 9443)]), &server)
+            .is_err()
+    );
+}
+
+#[test]
+fn missing_lease_restores_persisted_ports_but_existing_confirmation_wins() {
+    let server = server();
+
+    for metrics in [false, true] {
+        let mut ledger = Ledger::default();
+        let mut publication = publication(&mut ledger, &server);
+        ledger.release(&publication.id);
+        publication.frp_metrics = metrics;
+        publication.control_port = 20004;
+        assert_eq!(ledger.restore(&server, &publication).unwrap(), 20004);
+        assert_eq!(ledger.allocations["a"].frp_metrics, metrics);
+        ledger
+            .confirm_control(&server, &publication, 20006)
+            .unwrap();
+        assert_eq!(ledger.restore(&server, &publication).unwrap(), 20006);
+    }
+}
+
+#[test]
+fn rejected_lease_restoration_never_commits_a_replacement_port() {
+    let server = server();
+
+    for metrics in [false, true] {
+        for control in [0, 19999, 20002, 20003, u16::MAX] {
+            let mut ledger = Ledger::default();
+            let mut publication = publication(&mut ledger, &server);
+            ledger.release(&publication.id);
+            publication.frp_metrics = metrics;
+            publication.control_port = control;
+            ledger
+                .allocate("b", &service("b", &[(Protocol::Tcp, 20003)]), &server)
+                .unwrap();
+            let before = ledger.clone();
+
+            if control == 20002 && !metrics {
+                assert_eq!(ledger.restore(&server, &publication).unwrap(), control);
+            } else {
+                assert!(ledger.restore(&server, &publication).is_err());
+                assert_eq!(ledger, before);
+            }
+        }
     }
 }

@@ -53,10 +53,7 @@ pub(super) async fn ensure_publication(
         return Ok(false);
     }
 
-    let control = context
-        .store
-        .allocate(server, &publication.service, &publication.id)
-        .await?;
+    let control = context.store.allocate(server, &publication).await?;
 
     if control != publication.control_port {
         // A crash can leave the confirmed host selection in the ledger before
@@ -386,7 +383,7 @@ pub(super) fn publication_hash(
         "ip": publication.service.cluster_ip, "ports": publication.service.ports,
         "selector": publication.service.selector, "image": options.image,
         "pullPolicy": options.pull_policy, "worker": options.service_account,
-        "frp": transport::FRP_VERSION,
+        "frp": transport::FRP_VERSION, "frpMetrics": publication.frp_metrics,
     });
     Ok(hex::encode(Sha256::digest(serde_json::to_vec(&value)?)))
 }

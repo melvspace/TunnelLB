@@ -57,6 +57,7 @@ fn request() -> provision::Request {
 
 fn options() -> resources::ResourceOptions {
     resources::ResourceOptions {
+        metrics_address: "0.0.0.0:9090".parse().unwrap(),
         namespace: NAMESPACE.into(),
         image: "example.test/tunnellb@sha256:123".into(),
         pull_policy: "IfNotPresent".into(),

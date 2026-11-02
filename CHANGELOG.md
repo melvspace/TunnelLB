@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/melvspace/TunnelLB/compare/v0.2.1...v0.3.0) (2026-11-02)
+
+
+### Features
+
+* support Server label selectors for regional allocation ([#7](https://github.com/melvspace/TunnelLB/issues/7)) ([118b639](https://github.com/melvspace/TunnelLB/commit/118b639b67874d2443c25429ba0b765b26b11ca9))
+
 ## [0.2.1](https://github.com/melvspace/TunnelLB/compare/v0.2.0...v0.2.1) (2026-11-02)
 
 

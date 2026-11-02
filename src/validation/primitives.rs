@@ -28,3 +28,23 @@ pub(super) fn dns_label(value: &str) -> bool {
 pub(super) fn dns_subdomain(value: &str) -> bool {
     !value.is_empty() && value.len() <= 253 && value.split('.').all(dns_label)
 }
+
+pub(super) fn label_component(value: &str, allow_empty: bool) -> bool {
+    if value.is_empty() {
+        return allow_empty;
+    }
+
+    value.len() <= 63
+        && value.as_bytes()[0].is_ascii_alphanumeric()
+        && value.as_bytes()[value.len() - 1].is_ascii_alphanumeric()
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))
+}
+
+pub(super) fn label_key(value: &str) -> bool {
+    match value.split_once('/') {
+        Some((prefix, name)) => dns_subdomain(prefix) && label_component(name, false),
+        None => label_component(value, false),
+    }
+}

@@ -30,6 +30,7 @@ fn publication() -> Publication {
             ],
             servers: vec!["edge".into()],
             pool: None,
+            server_selector: None,
             replicas: 1,
         },
     }

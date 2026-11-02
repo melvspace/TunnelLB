@@ -358,13 +358,21 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
 
     let reason = if ready {
         "Published"
+    } else if records.len() < requested && request.server_selector.is_some() {
+        "ServerSelectorUnsatisfied"
     } else if records.len() < requested {
         "AllocationPending"
     } else {
         "Connecting"
     };
+    let selector_shortfall = format!(
+        "Server selector has allocated {} of {requested} requested replicas; waiting for matching, authorized, ready Servers with free ports.",
+        records.len(),
+    );
     let message = if ready {
         "Every requested edge has registered the publication."
+    } else if records.len() < requested && request.server_selector.is_some() {
+        &selector_shortfall
     } else if records.len() < requested {
         "Waiting for an eligible ready Server with free ports."
     } else {
@@ -519,6 +527,10 @@ pub(super) fn server_permitted(server: &Server, service: &ServiceRequest) -> boo
         || server.spec.allowed_namespaces.contains(&service.namespace))
         && (service.servers.is_empty() || service.servers.contains(&server.name_any()))
         && (service.pool.is_none() || server.spec.pool == service.pool)
+        && service
+            .server_selector
+            .as_ref()
+            .is_none_or(|selector| selector.matches(server.labels()))
 }
 
 pub(super) fn is_managed(service: &Service) -> bool {

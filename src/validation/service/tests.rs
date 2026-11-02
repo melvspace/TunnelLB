@@ -219,3 +219,72 @@ fn udp_rejects_proxy_v1_but_accepts_v2_and_none() {
         assert_eq!(request_with(v).is_ok(), valid);
     }
 }
+
+#[test]
+fn server_selectors_combine_with_pools_and_require_namespace_authorization() {
+    let mut value = service_value();
+    value["metadata"]["annotations"] = json!({
+        SERVER_SELECTOR: "topology.kubernetes.io/region in (europe,russia),!maintenance",
+        POOL: "minecraft",
+        REPLICAS: "2",
+    });
+    let service: Service = serde_json::from_value(value).unwrap();
+    let request = service_request(&service, &namespace()).unwrap();
+
+    assert_eq!(request.pool.as_deref(), Some("minecraft"));
+    assert_eq!(request.replicas, 2);
+    assert!(request.server_selector.unwrap().matches(&BTreeMap::from([(
+        "topology.kubernetes.io/region".into(),
+        "europe".into(),
+    )])));
+
+    let mut ns = namespace();
+    ns.metadata.labels = None;
+
+    assert!(service_request(&service, &ns).is_err());
+}
+
+#[test]
+fn explicit_names_cannot_be_combined_with_server_selectors() {
+    let mut value = service_value();
+    value["metadata"]["annotations"] = json!({
+        SERVERS: "edge-a",
+        SERVER_SELECTOR: "topology.kubernetes.io/region=europe",
+    });
+    let error = request_with(value).unwrap_err().to_string();
+
+    assert!(error.contains("cannot be combined"));
+    assert!(error.contains(SERVER_SELECTOR));
+}
+
+#[test]
+fn invalid_server_selectors_are_invalid_services() {
+    for selector in [
+        "",
+        " ",
+        "region=eu,",
+        "region in (eu",
+        "region in eu",
+        "region===eu",
+        "region > 1",
+        "bad/key/name=eu",
+        "region=bad/value",
+        "!",
+        "region in ((eu))",
+        "region in (eu) extra",
+        "region=eu||region=ru",
+        "region in (eu),,zone=a",
+    ] {
+        let mut value = service_value();
+        value["metadata"]["annotations"] = json!({SERVER_SELECTOR: selector});
+        let error = request_with(value).unwrap_err();
+
+        assert!(
+            matches!(
+                error.downcast_ref::<ValidationError>(),
+                Some(ValidationError::InvalidService(message)) if message.contains(SERVER_SELECTOR)
+            ),
+            "{selector:?}: {error}"
+        );
+    }
+}

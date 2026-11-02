@@ -10,13 +10,14 @@ use crate::api::{CLASS, ENABLED_LABEL, Protocol, ProxyProtocol, PublishedPort, S
 
 use super::{
     ValidationError,
-    primitives::{destination_ipv4, dns_label, dns_subdomain},
+    primitives::{destination_ipv4, dns_label, dns_subdomain, label_component, label_key},
 };
 
 #[cfg(test)]
 mod tests;
 
 const SERVERS: &str = "tunnellb.io/servers";
+const SERVER_SELECTOR: &str = "tunnellb.io/server-selector";
 const POOL: &str = "tunnellb.io/pool";
 const REPLICAS: &str = "tunnellb.io/replicas";
 const PROXY_PROTOCOL: &str = "tunnellb.io/proxy-protocol";
@@ -136,6 +137,20 @@ pub(super) fn request_from_service(service: &Service) -> Result<ServiceRequest> 
         )));
     }
 
+    let server_selector = annotation(SERVER_SELECTOR)
+        .map(|value| {
+            value
+                .parse()
+                .map_err(|error| service_error(format!("{SERVER_SELECTOR}: {error}")))
+        })
+        .transpose()?;
+
+    if !servers.is_empty() && server_selector.is_some() {
+        return Err(service_error(format!(
+            "{SERVERS} and {SERVER_SELECTOR} cannot be combined"
+        )));
+    }
+
     let explicit_replicas = annotation(REPLICAS)
         .map(|value| {
             value
@@ -177,6 +192,7 @@ pub(super) fn request_from_service(service: &Service) -> Result<ServiceRequest> 
         ports,
         servers,
         pool,
+        server_selector,
         replicas,
     })
 }
@@ -354,26 +370,6 @@ fn configure_proxy_protocol(ports: &mut [PublishedPort], value: &str) -> Result<
     }
 
     Ok(())
-}
-
-fn label_component(value: &str, allow_empty: bool) -> bool {
-    if value.is_empty() {
-        return allow_empty;
-    }
-
-    value.len() <= 63
-        && value.as_bytes()[0].is_ascii_alphanumeric()
-        && value.as_bytes()[value.len() - 1].is_ascii_alphanumeric()
-        && value
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.'))
-}
-
-fn label_key(value: &str) -> bool {
-    match value.split_once('/') {
-        Some((prefix, name)) => dns_subdomain(prefix) && label_component(name, false),
-        None => label_component(value, false),
-    }
 }
 
 fn target_port_name(value: &str) -> bool {

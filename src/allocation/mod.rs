@@ -56,6 +56,8 @@ pub struct Allocation {
     pub server_address: Ipv4Addr,
     pub ports: BTreeSet<PortReservation>,
     pub control_port: u16,
+    #[serde(default)]
+    pub frp_metrics: bool,
     /// SSH and administrator-reserved ports, protected for both protocols.
     ///
     /// Keeping this snapshot prevents another Server object for the same host
@@ -65,6 +67,12 @@ pub struct Allocation {
 }
 
 impl Allocation {
+    fn metrics_port(&self) -> Option<u16> {
+        self.frp_metrics
+            .then(|| self.control_port.checked_add(1))
+            .flatten()
+    }
+
     fn same_owner(&self, requested: &Self) -> bool {
         self.service_namespace == requested.service_namespace
             && self.service_name == requested.service_name
@@ -77,6 +85,7 @@ impl Allocation {
         self.same_owner(requested)
             && self.server_address == requested.server_address
             && self.ports == requested.ports
+            && self.frp_metrics == requested.frp_metrics
     }
 
     fn shares_server_with(&self, other: &Self) -> bool {
@@ -113,6 +122,15 @@ impl Allocation {
             !self.reserved_ports.contains(&self.control_port),
             "TCP control port {} is reserved for SSH or administration",
             self.control_port
+        );
+
+        ensure!(
+            !self.frp_metrics
+                || self.metrics_port().is_some_and(|port| {
+                    !self.reserved_ports.contains(&port)
+                        && self.ports.iter().all(|public| public.port != port)
+                }),
+            "monitoring port is unavailable"
         );
 
         for reservation in &self.ports {
@@ -227,6 +245,7 @@ impl Ledger {
                 .context("Server address must be IPv4")?,
             ports,
             control_port: 0,
+            frp_metrics: server.spec.frp_metrics,
             reserved_ports,
         };
         // A capacity error permits assignment elsewhere. Validate every stored
@@ -254,6 +273,9 @@ impl Ledger {
             ensure!(
                 !requested.reserved_ports.contains(&existing.control_port)
                     && existing
+                        .metrics_port()
+                        .is_none_or(|port| !requested.reserved_ports.contains(&port))
+                    && existing
                         .ports
                         .iter()
                         .all(|p| !requested.reserved_ports.contains(&p.port)),
@@ -263,6 +285,7 @@ impl Ledger {
             );
             occupied.extend(existing.ports.iter().map(|p| p.port));
             occupied.insert(existing.control_port);
+            occupied.extend(existing.metrics_port());
             excluded.extend(&existing.reserved_ports);
         }
 
@@ -276,7 +299,14 @@ impl Ledger {
         // Check other owners first, then include our own public numbers. This
         // allows TCP+UDP within one publication while keeping control distinct.
         occupied.extend(requested.ports.iter().map(|p| p.port));
-        let control_available = |port| !excluded.contains(&port) && !occupied.contains(&port);
+        let available = |port| !excluded.contains(&port) && !occupied.contains(&port);
+        let control_available = |port: u16| {
+            available(port)
+                && (!requested.frp_metrics
+                    || port
+                        .checked_add(1)
+                        .is_some_and(|metrics| metrics <= range.end && available(metrics)))
+        };
         requested.control_port = match existing_control {
             Some(port) => {
                 ensure!(
@@ -345,6 +375,7 @@ impl Ledger {
         for (id, allocation) in &self.allocations {
             let mut ports: BTreeSet<_> = allocation.ports.iter().map(|p| p.port).collect();
             ports.insert(allocation.control_port);
+            ports.extend(allocation.metrics_port());
 
             for identity in [
                 format!("name:{}", allocation.server_name),

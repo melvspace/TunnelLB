@@ -186,3 +186,29 @@ fn corrupt_ledgers_and_invalid_server_policy_cannot_be_confirmed() {
         assert_eq!(candidate, before, "failed confirmation of {problem}");
     }
 }
+
+#[test]
+fn monitoring_reserves_adjacent_ports_and_rejects_collisions() {
+    let mut server = server();
+    server.spec.frp_metrics = true;
+    let mut ledger = Ledger::default();
+    let first = service("a", &[(Protocol::Tcp, 443)]);
+    assert_eq!(ledger.allocate("a", &first, &server).unwrap(), 20000);
+    assert!(
+        ledger
+            .allocate("b", &service("b", &[(Protocol::Udp, 20001)]), &server)
+            .is_err()
+    );
+    assert_eq!(
+        ledger
+            .allocate("b", &service("b", &[(Protocol::Tcp, 8443)]), &server)
+            .unwrap(),
+        20002
+    );
+    server.spec.control_port_range.end = 20004;
+    assert!(
+        ledger
+            .allocate("c", &service("c", &[(Protocol::Tcp, 9443)]), &server)
+            .is_err()
+    );
+}

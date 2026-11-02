@@ -105,7 +105,7 @@ pub fn server_config(publication: &Publication, credentials: &Credentials) -> Re
         config["enablePrometheus"] = json!(true);
         config["webServer"] = json!({
             "addr": "::1",
-            "port": publication.control_port,
+            "port": publication.metrics_port().context("monitoring port overflow")?,
             "user": "metrics",
             "password": credentials.token,
         });
@@ -209,9 +209,17 @@ fn validate_publication(publication: &Publication) -> Result<()> {
         "publication must have at least one public port"
     );
 
+    ensure!(
+        !publication.frp_metrics || publication.metrics_port().is_some(),
+        "monitoring port must fit after the control port"
+    );
     let mut ports = BTreeSet::new();
 
     for port in &publication.service.ports {
+        ensure!(
+            Some(port.port) != publication.metrics_port(),
+            "public ports must not overlap the monitoring port"
+        );
         ensure!(port.port != 0, "public ports must be nonzero");
         ensure!(
             port.protocol != Protocol::Tcp || port.port != publication.control_port,

@@ -124,6 +124,13 @@ pub(super) fn validate_request(request: &Request) -> Result<()> {
                         .all(|p| p.port != publication.control_port),
                 "control port cannot overlap SSH or any numeric public port"
             );
+            ensure!(
+                !publication.frp_metrics
+                    || publication
+                        .metrics_port()
+                        .is_some_and(|port| port != request.ssh_port),
+                "monitoring port cannot overlap SSH"
+            );
             let config = required_field(&request.server_config, "server configuration")?;
             let cert = required_field(&request.server_certificate, "server certificate")?;
             let key = required_field(&request.server_private_key, "server private key")?;

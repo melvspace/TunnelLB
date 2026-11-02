@@ -132,17 +132,45 @@ pub fn retain_enrollments(servers: &[String]) {
     }
 }
 
-pub fn clear_snapshot() {
-    let mut registry = registry().lock().unwrap();
+/// Build inventory off-lock, then replace all supplied families in one commit.
+#[derive(Default)]
+pub struct Snapshot {
+    families: BTreeMap<&'static str, Samples>,
+}
+
+impl Snapshot {
+    pub fn clear(&mut self, name: &'static str) {
+        self.families.entry(name).or_default();
+    }
+
+    pub fn set(&mut self, name: &'static str, labels: &[(&str, &str)], value: f64) {
+        self.families
+            .entry(name)
+            .or_default()
+            .insert(key(labels), value);
+    }
+
+    pub fn publish(self) {
+        let mut registry = registry().lock().unwrap();
+
+        for (name, samples) in self.families {
+            registry.families.insert(name, ("gauge", samples));
+        }
+    }
+}
+
+pub fn inventory_snapshot() -> Snapshot {
+    let mut snapshot = Snapshot::default();
 
     for name in [
         "tunnellb_server_enrolled",
         "tunnellb_publication_provisioned",
         "tunnellb_publication_info",
-        "tunnellb_connector_subprocess_restarts",
     ] {
-        registry.families.remove(name);
+        snapshot.clear(name);
     }
+
+    snapshot
 }
 
 pub fn render() -> String {
@@ -180,8 +208,30 @@ fn serve(listener: tokio::net::TcpListener) -> tokio::task::JoinHandle<()> {
                 let _permit = permit;
                 let _ = tokio::time::timeout(Duration::from_secs(3), async {
                     let mut buffer = [0; 4096];
-                    let size = socket.read(&mut buffer).await?;
-                    let (status, body) = if buffer[..size].starts_with(b"GET /metrics HTTP/1.") {
+                    let mut size = 0;
+
+                    while !buffer[..size].windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                        if size == buffer.len() {
+                            return Ok::<_, std::io::Error>(());
+                        }
+
+                        let read = socket.read(&mut buffer[size..]).await?;
+
+                        if read == 0 {
+                            return Ok(());
+                        }
+
+                        size += read;
+                    }
+
+                    let line = buffer[..size]
+                        .split(|byte| *byte == b'\r')
+                        .next()
+                        .unwrap_or_default();
+                    let (status, body) = if matches!(
+                        line,
+                        b"GET /metrics HTTP/1.0" | b"GET /metrics HTTP/1.1"
+                    ) {
                         ("200 OK", render())
                     } else {
                         ("404 Not Found", String::new())
@@ -268,5 +318,49 @@ mod tests {
         let output = render();
         assert!(output.contains("tunnellb_ssh_failures_total{operation=\"enroll\",result=\"failure\",reason=\"SSHAuthenticationFailed\"} "));
         assert!(!output.contains("SECRET_SENTINEL"));
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fragmented_headers_wait_for_completion() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = serve(listener);
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        socket.write_all(b"GET /met").await.unwrap();
+        let mut byte = [0];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), socket.read(&mut byte),)
+                .await
+                .is_err()
+        );
+        socket
+            .write_all(b"rics HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = String::new();
+        socket.read_to_string(&mut response).await.unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+        task.abort();
+    }
+
+    #[test]
+    fn snapshot_publishes_together_and_preserves_unsupplied_families() {
+        set("snapshot_a", &[], 1.0);
+        set("snapshot_b", &[], 2.0);
+        set("snapshot_restarts", &[], 3.0);
+        let mut snapshot = Snapshot::default();
+        snapshot.set("snapshot_a", &[], 4.0);
+        snapshot.clear("snapshot_b");
+        assert!(render().contains("snapshot_a{} 1"));
+        snapshot.publish();
+        let output = render();
+        assert!(output.contains("snapshot_a{} 4"));
+        assert!(!output.contains("snapshot_b{}"));
+        assert!(output.contains("snapshot_restarts{} 3"));
     }
 }

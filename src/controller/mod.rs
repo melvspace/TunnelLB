@@ -232,13 +232,15 @@ async fn sweep_once(context: &Context) -> Result<()> {
         .list(&ListParams::default())
         .await?;
     let records = context.store.records("").await?;
-    observe_inventory(&servers.items, &records);
+    let mut snapshot = observe_inventory(&servers.items, &records);
 
     if let Ok(pods) = context
         .api::<Pod>()
         .list(&ListParams::default().labels("app.kubernetes.io/managed-by=tunnellb"))
         .await
     {
+        snapshot.clear("tunnellb_connector_subprocess_restarts");
+
         for pod in pods {
             if let Some(publication) = pod.labels().get(crate::api::PUBLICATION_LABEL) {
                 let Some(status) = pod
@@ -249,7 +251,7 @@ async fn sweep_once(context: &Context) -> Result<()> {
                 else {
                     continue;
                 };
-                crate::metrics::set(
+                snapshot.set(
                     "tunnellb_connector_subprocess_restarts",
                     &[("publication", publication)],
                     f64::from(status.restart_count),
@@ -257,6 +259,8 @@ async fn sweep_once(context: &Context) -> Result<()> {
             }
         }
     }
+
+    snapshot.publish();
 
     for record in &records {
         let service_live = services.items.iter().any(|s| {
@@ -333,10 +337,13 @@ impl Context {
 #[cfg(test)]
 mod tests;
 
-fn observe_inventory(servers: &[Server], records: &[crate::store::PublicationRecord]) {
+fn observe_inventory(
+    servers: &[Server],
+    records: &[crate::store::PublicationRecord],
+) -> crate::metrics::Snapshot {
     use crate::metrics;
 
-    metrics::clear_snapshot();
+    let mut snapshot = metrics::inventory_snapshot();
     metrics::retain_enrollments(
         &servers
             .iter()
@@ -346,7 +353,7 @@ fn observe_inventory(servers: &[Server], records: &[crate::store::PublicationRec
 
     for server in servers {
         let ready = server.status.as_ref().is_some_and(|s| s.phase == "Ready");
-        metrics::set(
+        snapshot.set(
             "tunnellb_server_enrolled",
             &[("server", &server.name_any())],
             f64::from(ready),
@@ -361,7 +368,7 @@ fn observe_inventory(servers: &[Server], records: &[crate::store::PublicationRec
             ("service_namespace", publication.service.namespace.as_str()),
             ("service", publication.service.name.as_str()),
         ];
-        metrics::set(
+        snapshot.set(
             "tunnellb_publication_provisioned",
             &labels,
             f64::from(
@@ -376,7 +383,9 @@ fn observe_inventory(servers: &[Server], records: &[crate::store::PublicationRec
                 ("protocol", port.protocol.frp_name()),
                 ("port", number.as_str()),
             ]);
-            metrics::set("tunnellb_publication_info", &labels, 1.0);
+            snapshot.set("tunnellb_publication_info", &labels, 1.0);
         }
     }
+
+    snapshot
 }

@@ -7,6 +7,16 @@ use super::{host::prelude, publication::publication_vars, shell_quote};
 use crate::provision::{AllocationOutcome, Request};
 
 pub(super) const CLAIM_FUNCTIONS: &str = r#"
+claimed_ports() {
+    local control=$1
+
+    if [ "$frp_metrics" = true ]; then
+        printf '%s\n' $public_ports "$((control + 1))" | sort -n | xargs
+    else
+        printf '%s\n' "$public_ports"
+    fi
+}
+
 valid_port() {
     [[ "$1" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$1" -le 65535 ] || fail "${2:-claim-state}"
 }
@@ -118,10 +128,15 @@ read_own_claim
 read_current_generation
 [ -z "$current_generation" ] || [ "$current_generation" = "$claim_generation" ] || fail claim-state
 if [ -n "$claim_generation" ]; then
-    [ "$claim_generation" = "$generation" ] && [ "$claim_public" = "$public_ports" ] || fail reservation-conflict
+    [ "$claim_generation" = "$generation" ] && [ "$claim_public" = "$(claimed_ports "$claim_control")" ] || fail reservation-conflict
     sync "$claims/$owner/$publication.claim" "$claims/$owner" "$claims"
     [ "$claim_control" -ge "$range_start" ] && [ "$claim_control" -le "$range_end" ] && [ "$claim_control" != "$ssh_port" ] || reservation_changed
     case " $excluded " in *" $claim_control "*) reservation_changed ;; esac
+    if [ "$frp_metrics" = true ]; then
+        metrics=$((claim_control + 1))
+        [ "$metrics" -le "$range_end" ] || reservation_changed
+        case " $excluded " in *" $metrics "*) reservation_changed ;; esac
+    fi
     # Lost responses and controller restarts must recover the chosen number,
     # even when the retry proposes a different candidate or sockets are live.
     reserved "$claim_control"
@@ -162,7 +177,8 @@ done
 for number in $public_ports $excluded "$ssh_port"; do used[$number]=excluded; done
 available() {
     [ "$1" -ge "$range_start" ] && [ "$1" -le "$range_end" ] &&
-        [ -z "${used[$1]:-}" ]
+        [ -z "${used[$1]:-}" ] &&
+        { [ "$frp_metrics" = false ] || { [ "$1" -lt "$range_end" ] && [ -z "${used[$(($1 + 1))]:-}" ]; }; }
 }
 control=
 if available "$preferred"; then
@@ -178,7 +194,7 @@ if [ -z "$control" ]; then
 fi
 claim_directory "$claims/$owner"
 chmod 0700 "$claims/$owner"
-persist_marker "$claims/$owner/$publication.claim" "$owner|$publication|$generation|$control|$public_ports"
+persist_marker "$claims/$owner/$publication.claim" "$owner|$publication|$generation|$control|$(claimed_ports "$control")"
 reserved "$control"
 "#);
 

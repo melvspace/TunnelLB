@@ -41,6 +41,7 @@ impl Ledger {
 
             if id != &publication.id {
                 exclusions.insert(existing.control_port);
+                exclusions.extend(existing.metrics_port());
             }
         }
 
@@ -60,6 +61,13 @@ impl Ledger {
         ensure!(
             control_port != 0 && (range.start..=range.end).contains(&control_port),
             "selected TCP control port {control_port} is outside the Server range"
+        );
+        ensure!(
+            !publication.frp_metrics
+                || control_port.checked_add(1).is_some_and(|metrics| {
+                    metrics <= range.end && !exclusions.contains(&metrics)
+                }),
+            "selected monitoring port is unavailable"
         );
         ensure!(
             !exclusions.contains(&control_port),
@@ -118,6 +126,7 @@ impl Ledger {
                 && allocation.server_uid == publication.server_uid
                 && allocation.server_address == publication.server_address
                 && allocation.ports == ports
+                && allocation.frp_metrics == publication.frp_metrics
                 && ports.len() == publication.service.ports.len(),
             "publication allocation has a different owner, Server or reservation set"
         );

@@ -238,9 +238,39 @@ fn malformed_foreign_and_ambiguous_worker_diagnostics_stay_generic() {
 
     // Retrying the same cause remains unambiguous; Pending Jobs still retry.
     let pods = [pod(Some(valid.clone()), 1), pod(Some(valid), 1)];
-    let State::Failed(error) = result(&request(), &terminal(job(), "FailureTarget"), &pods) else {
+    let State::Failed(error) = result(&request(), &terminal(job(), "Failed"), &pods) else {
         panic!("expected failure");
     };
     assert_eq!(error.reason(), "ControlUnreachable");
     assert!(matches!(result(&request(), &job(), &pods), State::Pending));
+}
+
+#[test]
+fn failure_target_remains_pending_until_termination_finishes() {
+    let mut terminating = terminal(job(), "FailureTarget");
+    let mut worker = pod(None, 1);
+    worker
+        .status
+        .as_mut()
+        .unwrap()
+        .container_statuses
+        .as_mut()
+        .unwrap()[0]
+        .state = None;
+    assert!(matches!(
+        result(&request(), &terminating, &[worker]),
+        State::Pending
+    ));
+    terminating = terminal(terminating, "Failed");
+    let pods = [pod(Some(json!({"error": "ssh-timeout"}).to_string()), 1)];
+    assert!(matches!(
+        result(&request(), &terminating, &pods),
+        State::Failed(_)
+    ));
+    assert_eq!(
+        pods.iter()
+            .filter_map(|pod| super::super::outcome::worker(&terminating, pod))
+            .count(),
+        1
+    );
 }

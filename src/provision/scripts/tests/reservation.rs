@@ -404,3 +404,24 @@ fn allocation_parser_is_strict_bounded_and_does_not_echo_untrusted_output() {
         assert!(!error.contains("RAW_SECRET"));
     }
 }
+
+#[test]
+fn monitored_claims_reserve_both_ports_across_owners_and_retries() {
+    let host = TestHost::new();
+    let mut first = owner_request("first", 443);
+    first.publication.as_mut().unwrap().frp_metrics = true;
+    refresh_config(&mut first);
+    host.enroll(&first);
+    let control = choose(&host, &mut first);
+    assert_eq!(choose(&host, &mut first), control);
+    let record = std::fs::read_to_string(claim(&host, &first)).unwrap();
+    assert!(record.contains(&(control + 1).to_string()));
+    host.success(apply_script(&first).unwrap());
+    let second = owner_request("second", control + 1);
+    host.enroll(&second);
+    assert!(
+        matches!(host.reserve(&second), AllocationOutcome::PortConflict { port } if port == control + 1)
+    );
+    host.success(remove_script(&first).unwrap());
+    assert!(!claim(&host, &first).exists());
+}

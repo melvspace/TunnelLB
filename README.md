@@ -351,9 +351,10 @@ Set `spec.frpMetrics: true` on a Server to enable the bundled FRP v0.71.1
 Prometheus collector. Changing this setting replaces its publications through
 normal cleanup and credential replacement, interrupting their connections.
 Each publication-specific **edge frps process** binds its web server to IPv6
-loopback `[::1]:<allocated-control-port>`. Host-wide control-port allocation
-makes these listeners distinct; the FRP control listener is IPv4, so it does not
-collide with the IPv6 loopback web listener. IPv6 loopback must be enabled on the
+loopback `[::1]:<allocated-control-port + 1>`. Monitored publications reserve
+both adjacent numbers within `controlPortRange`, in the local ledger and the
+host-wide claim. Neither number can overlap another publication or public port.
+The distinct numbers also avoid Go's dual-stack wildcard listener collision. IPv6 loopback must be enabled on the
 edge. No monitoring port is opened by TunnelLB's host firewall. The dashboard
 and admin API remain loopback-only, with a dedicated username `metrics` and the
 publication token as password; do not expose that listener directly.
@@ -367,7 +368,7 @@ location = /tunnellb/pub-example/metrics {
     allow 192.0.2.10; # replace with your Prometheus source address
     deny all;
     limit_except GET { deny all; }
-    proxy_pass http://[::1]:23456/metrics?;
+    proxy_pass http://[::1]:23457/metrics?;
 }
 location /tunnellb/ { return 404; }
 ```

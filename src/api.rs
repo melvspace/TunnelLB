@@ -174,3 +174,11 @@ pub struct Publication {
     pub control_port: u16,
     pub service: ServiceRequest,
 }
+
+impl Publication {
+    pub fn metrics_port(&self) -> Option<u16> {
+        self.frp_metrics
+            .then(|| self.control_port.checked_add(1))
+            .flatten()
+    }
+}

@@ -328,7 +328,7 @@ fn traffic_monitoring_is_opt_in_private_and_unique_per_control_allocation() {
     let first: toml::Value =
         toml::from_str(&server_config(&publication, &credentials).unwrap()).unwrap();
     assert_eq!(first["webServer"]["addr"].as_str(), Some("::1"));
-    assert_eq!(first["webServer"]["port"].as_integer(), Some(23456));
+    assert_eq!(first["webServer"]["port"].as_integer(), Some(23457));
     assert_eq!(first["enablePrometheus"].as_bool(), Some(true));
     assert_eq!(
         first["webServer"]["password"].as_str(),

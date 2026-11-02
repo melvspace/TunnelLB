@@ -62,10 +62,9 @@ async fn ledger_create_and_replace_races_preserve_concurrent_allocations() {
                 body
             }),
         ]);
-        let allocated = store
-            .allocate(&server, &record().publication)
-            .await
-            .unwrap();
+        let mut publication = record().publication;
+        publication.control_port = expected_control;
+        let allocated = store.allocate(&server, &publication).await.unwrap();
         assert_eq!(allocated, expected_control);
         assert_ne!(allocated, competing_control);
         assert!(queue.lock().unwrap().is_empty());
@@ -256,17 +255,19 @@ async fn rebuilding_a_missing_ledger_preserves_the_publication_listener_layout()
     for enabled in [false, true] {
         let mut publication = record().publication;
         publication.frp_metrics = enabled;
+        publication.control_port = 20004;
         let (store, queue) = mock(vec![
             Exchange::missing("GET", &url),
             Exchange::inspect("POST", &path("configmaps", ""), 201, move |body| {
                 let ledger: Ledger =
                     serde_json::from_str(body["data"]["ledger.json"].as_str().unwrap()).unwrap();
                 assert_eq!(ledger.allocations[ID].frp_metrics, enabled);
+                assert_eq!(ledger.allocations[ID].control_port, 20004);
 
                 body
             }),
         ]);
-        assert_eq!(store.allocate(&server, &publication).await.unwrap(), 20000);
+        assert_eq!(store.allocate(&server, &publication).await.unwrap(), 20004);
         assert!(queue.lock().unwrap().is_empty());
     }
 }

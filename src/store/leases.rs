@@ -19,7 +19,7 @@ impl Store {
             server,
             &publication.service,
             &publication.id,
-            Some(publication.frp_metrics),
+            Some(publication),
         )
         .await
     }
@@ -79,7 +79,7 @@ impl Store {
         server: &Server,
         request: &ServiceRequest,
         id: &str,
-        existing_metrics: Option<bool>,
+        publication: Option<&Publication>,
     ) -> Result<u16> {
         validate_id(id)?;
         ensure!(!request.uid.is_empty(), "Service UID is required");
@@ -92,9 +92,9 @@ impl Store {
         self.edit_ledger(
             server_uid,
             true,
-            existing_metrics.is_none().then_some(id),
-            |ledger| match existing_metrics {
-                Some(enabled) => ledger.allocate_with_metrics(id, request, server, enabled),
+            publication.is_none().then_some(id),
+            |ledger| match publication {
+                Some(publication) => ledger.restore(server, publication),
                 None => ledger.allocate_unpublished(id, request, server),
             },
         )

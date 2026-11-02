@@ -211,3 +211,48 @@ fn monitoring_reserves_adjacent_ports_and_rejects_collisions() {
             .is_err()
     );
 }
+
+#[test]
+fn missing_lease_restores_persisted_ports_but_existing_confirmation_wins() {
+    let server = server();
+
+    for metrics in [false, true] {
+        let mut ledger = Ledger::default();
+        let mut publication = publication(&mut ledger, &server);
+        ledger.release(&publication.id);
+        publication.frp_metrics = metrics;
+        publication.control_port = 20004;
+        assert_eq!(ledger.restore(&server, &publication).unwrap(), 20004);
+        assert_eq!(ledger.allocations["a"].frp_metrics, metrics);
+        ledger
+            .confirm_control(&server, &publication, 20006)
+            .unwrap();
+        assert_eq!(ledger.restore(&server, &publication).unwrap(), 20006);
+    }
+}
+
+#[test]
+fn rejected_lease_restoration_never_commits_a_replacement_port() {
+    let server = server();
+
+    for metrics in [false, true] {
+        for control in [0, 19999, 20002, 20003, u16::MAX] {
+            let mut ledger = Ledger::default();
+            let mut publication = publication(&mut ledger, &server);
+            ledger.release(&publication.id);
+            publication.frp_metrics = metrics;
+            publication.control_port = control;
+            ledger
+                .allocate("b", &service("b", &[(Protocol::Tcp, 20003)]), &server)
+                .unwrap();
+            let before = ledger.clone();
+
+            if control == 20002 && !metrics {
+                assert_eq!(ledger.restore(&server, &publication).unwrap(), control);
+            } else {
+                assert!(ledger.restore(&server, &publication).is_err());
+                assert_eq!(ledger, before);
+            }
+        }
+    }
+}

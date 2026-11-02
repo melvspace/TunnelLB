@@ -4,6 +4,32 @@ use anyhow::{Context, Result, ensure};
 use std::{collections::BTreeSet, net::Ipv4Addr};
 
 impl Ledger {
+    /// Rebuild a missing lease at its persisted control port. An existing lease
+    /// may already contain a host-confirmed port that has not reached the record.
+    pub(crate) fn restore(&mut self, server: &Server, publication: &Publication) -> Result<u16> {
+        let mut next = self.clone();
+        let missing = !next.allocations.contains_key(&publication.id);
+        let control = next.allocate_with_metrics(
+            &publication.id,
+            &publication.service,
+            server,
+            publication.frp_metrics,
+        )?;
+
+        if missing {
+            // Validate the persisted selection through the same collision and
+            // policy checks used for host confirmation, before committing it.
+            let mut provisional = publication.clone();
+            provisional.control_port = control;
+            next.confirm_control(server, &provisional, publication.control_port)?;
+        }
+
+        let restored = next.allocations[&publication.id].control_port;
+        *self = next;
+
+        Ok(restored)
+    }
+
     /// Numbers unavailable to the host's control-port selection. The existing
     /// control is deliberately omitted unless current Server policy excludes it.
     pub(crate) fn control_exclusions(

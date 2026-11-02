@@ -36,7 +36,7 @@ fn publication_numbers_are_exclusive_and_conflicts_are_atomic() {
             let disjoint = service("attacker", &[(attacker_protocol, 80)]);
             assert_eq!(
                 ledger.allocate("attacker", &disjoint, &server).unwrap(),
-                20001
+                20002
             );
         }
     }
@@ -50,7 +50,7 @@ fn control_and_public_numbers_remain_distinct_across_protocols_and_retries() {
         (vec![(Protocol::Tcp, 20000)], 20001),
         (vec![(Protocol::Udp, 20000)], 20001),
         (vec![(Protocol::Tcp, 20000), (Protocol::Udp, 20000)], 20001),
-        (vec![(Protocol::Udp, 20001)], 20000),
+        (vec![(Protocol::Udp, 20001)], 20002),
     ] {
         let mut ledger = Ledger::default();
         let request = service("a", &ports);
@@ -80,7 +80,7 @@ fn control_and_public_numbers_remain_distinct_across_protocols_and_retries() {
             ledger
                 .allocate("b", &service("b", &[(Protocol::Tcp, 443)]), &server)
                 .unwrap(),
-            20002
+            expected_control + 2
         );
     }
 }
@@ -116,7 +116,7 @@ fn ssh_and_admin_reservations_exclude_both_protocols_and_control() {
 #[test]
 fn exhaustion_is_atomic_and_release_makes_control_and_public_ports_reusable() {
     let mut server = server();
-    server.spec.control_port_range.end = 20000;
+    server.spec.control_port_range.end = 20001;
     let mut ledger = Ledger::default();
     ledger
         .allocate("a", &service("a", &[(Protocol::Tcp, 443)]), &server)
@@ -221,10 +221,10 @@ fn typed_requests_do_not_bypass_validation() {
 }
 
 #[test]
-fn control_range_includes_the_last_u16_port_without_overflow() {
+fn monitoring_pair_reaches_the_last_u16_port_without_overflow() {
     let mut server = server();
     server.spec.control_port_range = PortRange {
-        start: u16::MAX,
+        start: u16::MAX - 1,
         end: u16::MAX,
     };
     let mut ledger = Ledger::default();
@@ -238,7 +238,7 @@ fn control_range_includes_the_last_u16_port_without_overflow() {
         ledger
             .allocate("p", &service("a", &[(Protocol::Tcp, 443)]), &server)
             .unwrap(),
-        u16::MAX
+        u16::MAX - 1
     );
     assert_rejected(
         &mut ledger,
@@ -246,4 +246,22 @@ fn control_range_includes_the_last_u16_port_without_overflow() {
         &service("b", &[(Protocol::Tcp, 8080)]),
         &server,
     );
+}
+
+#[test]
+fn a_single_control_number_cannot_fit_a_monitoring_pair() {
+    let mut server = server();
+    server.spec.control_port_range.start = u16::MAX;
+    server.spec.control_port_range.end = u16::MAX;
+    let mut ledger = Ledger::default();
+    let error = assert_rejected(
+        &mut ledger,
+        "a",
+        &service("a", &[(Protocol::Tcp, 443)]),
+        &server,
+    );
+    assert!(matches!(
+        error.downcast_ref::<AllocationConflict>(),
+        Some(AllocationConflict::ControlRangeExhausted)
+    ));
 }

@@ -19,7 +19,7 @@ async fn control_confirmation_retries_cas_preserving_concurrent_leases_and_metad
     competing.ports[0].port = 8443;
     winner.allocate(OTHER_ID, &competing, &server).unwrap();
     let mut expected = winner.clone();
-    expected.allocations.get_mut(ID).unwrap().control_port = 20003;
+    expected.allocations.get_mut(ID).unwrap().control_port = 20004;
     let mut winner_object = ledger_object(&winner, "2");
     winner_object
         .data
@@ -44,7 +44,7 @@ async fn control_confirmation_retries_cas_preserving_concurrent_leases_and_metad
         }),
     ]);
     store
-        .confirm_control(&server, &publication, 20003)
+        .confirm_control(&server, &publication, 20004)
         .await
         .unwrap();
     assert!(queue.lock().unwrap().is_empty());
@@ -110,7 +110,7 @@ async fn control_exclusions_read_the_owned_ledger_without_requiring_old_control_
             .control_exclusions(&server, &publication)
             .await
             .unwrap(),
-        vec![22, 443, 8443, 20000]
+        vec![22, 443, 8443, 20000, 20001]
     );
     assert!(queue.lock().unwrap().is_empty());
 }

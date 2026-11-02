@@ -53,10 +53,7 @@ pub(super) async fn ensure_publication(
         return Ok(false);
     }
 
-    let control = context
-        .store
-        .allocate(server, &publication.service, &publication.id)
-        .await?;
+    let control = context.store.allocate(server, &publication).await?;
 
     if control != publication.control_port {
         // A crash can leave the confirmed host selection in the ledger before

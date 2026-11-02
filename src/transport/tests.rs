@@ -318,7 +318,7 @@ fn untrusted_metadata_is_never_rendered_and_reordering_is_stable() {
 }
 
 #[test]
-fn traffic_monitoring_is_opt_in_private_and_unique_per_control_allocation() {
+fn legacy_publications_keep_their_listener_layout_and_metrics_are_private() {
     let mut publication = publication();
     let credentials = credentials(&publication).unwrap();
     let disabled: toml::Value =

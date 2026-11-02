@@ -62,7 +62,10 @@ async fn ledger_create_and_replace_races_preserve_concurrent_allocations() {
                 body
             }),
         ]);
-        let allocated = store.allocate(&server, &request, ID).await.unwrap();
+        let allocated = store
+            .allocate(&server, &record().publication)
+            .await
+            .unwrap();
         assert_eq!(allocated, expected_control);
         assert_ne!(allocated, competing_control);
         assert!(queue.lock().unwrap().is_empty());
@@ -88,7 +91,12 @@ async fn conflicting_public_port_is_rejected_after_rereading_winner() {
         ),
         Exchange::reply("GET", &url, 200, json!(ledger_object(&winner, "2"))),
     ]);
-    assert!(store.allocate(&server, &request, ID).await.is_err());
+    assert!(
+        store
+            .allocate(&server, &record().publication)
+            .await
+            .is_err()
+    );
     assert!(queue.lock().unwrap().is_empty());
 }
 
@@ -114,9 +122,7 @@ async fn ledger_retries_at_most_eight_times_and_can_succeed_on_eighth_attempt() 
         }
 
         let (store, queue) = mock(exchanges);
-        let result = store
-            .allocate(&server(), &record().publication.service, ID)
-            .await;
+        let result = store.allocate(&server(), &record().publication).await;
         assert_eq!(result.is_ok(), succeed);
 
         if let Err(error) = result {
@@ -206,7 +212,7 @@ async fn foreign_corrupt_or_unversioned_ledger_is_not_overwritten() {
         let (store, queue) = mock(vec![Exchange::reply("GET", &url, 200, json!(object))]);
         assert!(
             store
-                .allocate(&server(), &record().publication.service, ID)
+                .allocate(&server(), &record().publication)
                 .await
                 .is_err()
         );
@@ -229,7 +235,7 @@ async fn allocation_api_failures_do_not_allow_assignment_movement() {
             ),
         ]);
         let error = store
-            .allocate(&server(), &record().publication.service, ID)
+            .allocate(&server(), &record().publication)
             .await
             .unwrap_err();
         assert!(
@@ -238,6 +244,29 @@ async fn allocation_api_failures_do_not_allow_assignment_movement() {
                 .is_none()
         );
         assert!(error.downcast_ref::<kube::Error>().is_some());
+        assert!(queue.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn rebuilding_a_missing_ledger_preserves_the_publication_listener_layout() {
+    let server = server();
+    let url = path("configmaps", &server_state_name("ports", "server-uid"));
+
+    for enabled in [false, true] {
+        let mut publication = record().publication;
+        publication.frp_metrics = enabled;
+        let (store, queue) = mock(vec![
+            Exchange::missing("GET", &url),
+            Exchange::inspect("POST", &path("configmaps", ""), 201, move |body| {
+                let ledger: Ledger =
+                    serde_json::from_str(body["data"]["ledger.json"].as_str().unwrap()).unwrap();
+                assert_eq!(ledger.allocations[ID].frp_metrics, enabled);
+
+                body
+            }),
+        ]);
+        assert_eq!(store.allocate(&server, &publication).await.unwrap(), 20000);
         assert!(queue.lock().unwrap().is_empty());
     }
 }

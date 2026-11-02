@@ -20,9 +20,6 @@ pub const PUBLICATION_LABEL: &str = "tunnellb.io/publication";
 #[kube(printcolumn = r#"{"name":"Phase","type":"string","jsonPath":".status.phase"}"#)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerSpec {
-    /// Enable private IPv6-loopback FRP traffic metrics for new publications.
-    #[serde(default)]
-    pub frp_metrics: bool,
     /// Existing IPv4 address of the external server.
     pub address: String,
     pub ssh: SshSpec,
@@ -165,6 +162,7 @@ pub struct ValidatedService {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Publication {
+    /// New publications always provision metrics; false preserves legacy listeners.
     #[serde(default)]
     pub frp_metrics: bool,
     pub id: String,

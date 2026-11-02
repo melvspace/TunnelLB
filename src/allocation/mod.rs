@@ -56,6 +56,7 @@ pub struct Allocation {
     pub server_address: Ipv4Addr,
     pub ports: BTreeSet<PortReservation>,
     pub control_port: u16,
+    /// Preserve the socket layout of publications created before private metrics.
     #[serde(default)]
     pub frp_metrics: bool,
     /// SSH and administrator-reserved ports, protected for both protocols.
@@ -160,9 +161,10 @@ pub struct Ledger {
 }
 
 impl Ledger {
-    /// Reserve every public port number and one distinct TCP control port, or
-    /// change nothing. Protocols remain part of a lease's exact retry identity,
-    /// but never permit different publications to share a port number.
+    /// Reserve every public port number and a distinct control/metrics pair for
+    /// new publications, or change nothing. Legacy retries retain their layout.
+    /// Protocols remain part of a lease's exact retry identity, but never permit
+    /// different publications to share a port number.
     ///
     /// Control ports are chosen in ascending order. A compatible allocation keeps
     /// its existing control port, even if a lower port has since become available.
@@ -174,6 +176,23 @@ impl Ledger {
         publication_id: &str,
         service: &ServiceRequest,
         server: &Server,
+    ) -> Result<u16> {
+        let frp_metrics = self
+            .allocations
+            .get(publication_id)
+            .is_none_or(|existing| existing.frp_metrics);
+
+        self.allocate_with_metrics(publication_id, service, server, frp_metrics)
+    }
+
+    /// Restore a publication's persisted listener layout, including when its
+    /// ledger needs rebuilding. A conflicting existing layout is never replaced.
+    pub(crate) fn allocate_with_metrics(
+        &mut self,
+        publication_id: &str,
+        service: &ServiceRequest,
+        server: &Server,
+        frp_metrics: bool,
     ) -> Result<u16> {
         validate_id("publication ID", publication_id)?;
         let server_name = server
@@ -245,7 +264,7 @@ impl Ledger {
                 .context("Server address must be IPv4")?,
             ports,
             control_port: 0,
-            frp_metrics: server.spec.frp_metrics,
+            frp_metrics,
             reserved_ports,
         };
         // A capacity error permits assignment elsewhere. Validate every stored

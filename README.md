@@ -347,17 +347,21 @@ error chains. Logs at higher verbosity are unnecessary for these diagnoses.
 
 ### Edge FRP traffic metrics
 
-Set `spec.frpMetrics: true` on a Server to enable the bundled FRP v0.71.1
-Prometheus collector. Changing this setting replaces its publications through
-normal cleanup and credential replacement, interrupting their connections.
-Each publication-specific **edge frps process** binds its web server to IPv6
-loopback `[::1]:<allocated-control-port + 1>`. Monitored publications reserve
-both adjacent numbers within `controlPortRange`, in the local ledger and the
-host-wide claim. Neither number can overlap another publication or public port.
-The distinct numbers also avoid Go's dual-stack wildcard listener collision. IPv6 loopback must be enabled on the
-edge. No monitoring port is opened by TunnelLB's host firewall. The dashboard
-and admin API remain loopback-only, with a dedicated username `metrics` and the
-publication token as password; do not expose that listener directly.
+Every new publication provisions the bundled FRP v0.71.1 Prometheus collector.
+Its **edge frps process** binds its authenticated web server to IPv6 loopback
+`[::1]:<allocated-control-port + 1>`. Enable or disable scraping through your
+external monitoring configuration; this does not replace publications or interrupt
+their connections. Metrics collection and its private listener remain active.
+Existing publications created without metrics retain their original socket layout
+until explicitly recreated or naturally replaced.
+
+New publications reserve both adjacent numbers within `controlPortRange`, in the
+local ledger and the host-wide claim. Neither number can overlap another
+publication or public port. The distinct numbers also avoid Go's dual-stack
+wildcard listener collision. IPv6 loopback must be enabled on the edge. No
+monitoring port is opened by TunnelLB's host firewall. The dashboard and admin API
+remain loopback-only, with a dedicated username `metrics` and the publication token
+as password; do not expose that listener directly.
 
 Use an existing restricted reverse proxy on the edge to publish **only** the
 exact metrics route. For example, inside an existing nginx TLS virtual host:

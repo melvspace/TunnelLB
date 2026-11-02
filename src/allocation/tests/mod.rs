@@ -5,7 +5,6 @@ fn server() -> Server {
     let mut server = Server::new(
         "edge",
         ServerSpec {
-            frp_metrics: false,
             address: "203.0.113.10".into(),
             ssh: SshSpec {
                 user: "root".into(),
@@ -20,7 +19,7 @@ fn server() -> Server {
             reserved_ports: Vec::new(),
             control_port_range: PortRange {
                 start: 20000,
-                end: 20003,
+                end: 20007,
             },
         },
     );

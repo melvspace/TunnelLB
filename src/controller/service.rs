@@ -290,7 +290,7 @@ pub(super) async fn service_inner(service: &Service, context: &Context) -> Resul
             Err(error) => return Err(error),
         };
         let publication = Publication {
-            frp_metrics: server.spec.frp_metrics,
+            frp_metrics: true,
             id,
             server_name: server.name_any(),
             server_uid,
@@ -433,10 +433,7 @@ async fn reconcile_assignments(
         }) == Some(record.publication.server_address);
         let duplicate = server.is_some_and(|m| duplicate_address(m, servers));
 
-        if !eligible
-            || !same_allocation(&record.publication.service, request)
-            || server.is_some_and(|s| s.spec.frp_metrics != record.publication.frp_metrics)
-        {
+        if !eligible || !same_allocation(&record.publication.service, request) {
             removing = true;
             cleanup_publication(record, context, false).await?;
         } else if duplicate || (unavailable && record.publication.service.ports != request.ports) {

@@ -14,13 +14,14 @@ use crate::{
 };
 
 impl Store {
-    pub async fn allocate(
-        &self,
-        server: &Server,
-        request: &ServiceRequest,
-        id: &str,
-    ) -> Result<u16> {
-        self.allocate_lease(server, request, id, false).await
+    pub async fn allocate(&self, server: &Server, publication: &Publication) -> Result<u16> {
+        self.allocate_lease(
+            server,
+            &publication.service,
+            &publication.id,
+            Some(publication.frp_metrics),
+        )
+        .await
     }
 
     /// Recover a reservation committed before its publication record was saved.
@@ -32,7 +33,7 @@ impl Store {
         request: &ServiceRequest,
         id: &str,
     ) -> Result<u16> {
-        self.allocate_lease(server, request, id, true).await
+        self.allocate_lease(server, request, id, None).await
     }
 
     /// Read local exclusions without reserving a second control port. The host
@@ -71,12 +72,14 @@ impl Store {
         .context("publication allocation ledger is missing")
     }
 
+    // A persisted listener layout restores an existing publication; None creates
+    // or replaces an unpublished reservation using the current defaults.
     async fn allocate_lease(
         &self,
         server: &Server,
         request: &ServiceRequest,
         id: &str,
-        unpublished: bool,
+        existing_metrics: Option<bool>,
     ) -> Result<u16> {
         validate_id(id)?;
         ensure!(!request.uid.is_empty(), "Service UID is required");
@@ -86,13 +89,15 @@ impl Store {
             .as_deref()
             .filter(|uid| !uid.is_empty())
             .context("Server UID is required")?;
-        self.edit_ledger(server_uid, true, unpublished.then_some(id), |ledger| {
-            if unpublished {
-                ledger.allocate_unpublished(id, request, server)
-            } else {
-                ledger.allocate(id, request, server)
-            }
-        })
+        self.edit_ledger(
+            server_uid,
+            true,
+            existing_metrics.is_none().then_some(id),
+            |ledger| match existing_metrics {
+                Some(enabled) => ledger.allocate_with_metrics(id, request, server, enabled),
+                None => ledger.allocate_unpublished(id, request, server),
+            },
+        )
         .await?
         .context("allocation ledger was not created")
     }

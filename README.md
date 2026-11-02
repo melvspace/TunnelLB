@@ -139,7 +139,7 @@ Add these settings to the Service's `metadata.annotations`:
 |---|---|---|
 | `tunnellb.io/servers` | `"edge-1,edge-2"` | Uses the specified servers. |
 | `tunnellb.io/pool` | `"public"` | Selects servers with `spec.pool: public`. |
-| `tunnellb.io/server-selector` | `"topology.kubernetes.io/region=europe"` | Filters Server labels, optionally within a pool. |
+| `tunnellb.io/server-selector` | `"topology.kubernetes.io/region=region-a"` | Filters Server labels, optionally within a pool. |
 | `tunnellb.io/replicas` | `"2"` | Uses two servers instead of one. |
 | `tunnellb.io/proxy-protocol` | `"https=v2"` | Sends the client IP through PROXY protocol on the named port. |
 
@@ -153,27 +153,27 @@ See the [chart settings](charts/tunnellb/values.yaml) and [Server settings](exam
 ## Regional Server selection
 
 Label Server resources with operator-supplied regions and zones, independently of
-application pools. For example, an existing `edge-eu-1` Server with
-`spec.pool: minecraft` can have these labels:
+application pools. For example, an existing `edge-a-1` Server with
+`spec.pool: application` can have these labels:
 
 ```sh
-kubectl label server edge-eu-1 topology.kubernetes.io/region=europe topology.kubernetes.io/zone=eu-1
+kubectl label server edge-a-1 topology.kubernetes.io/region=region-a topology.kubernetes.io/zone=zone-a-1
 ```
 
-A Minecraft Service can request two European servers within that pool:
+A Service can request two servers in `region-a` within that pool:
 
 ```yaml
 metadata:
   annotations:
-    tunnellb.io/pool: "minecraft"
-    tunnellb.io/server-selector: "topology.kubernetes.io/region=europe"
+    tunnellb.io/pool: "application"
+    tunnellb.io/server-selector: "topology.kubernetes.io/region=region-a"
     tunnellb.io/replicas: "2"
 ```
 
 `server-selector` uses Kubernetes label selector syntax: `=`, `==`, `!=`, `in`,
 `notin`, key existence (`key`), and key absence (`!key`). Comma-separated
 requirements are ANDed, for example
-`topology.kubernetes.io/region in (europe,russia),!maintenance`.
+`topology.kubernetes.io/region in (region-a,region-b),!maintenance`.
 Negative requirements (`!=`, `notin`) also match Servers missing the named label.
 An empty or malformed selector is rejected with `InvalidService`.
 Explicit `tunnellb.io/servers` cannot be combined with `server-selector` or `pool`;
@@ -202,7 +202,7 @@ their own more specific condition reasons.
 
 Regions are labels, not IP geolocation. ExternalDNS remains responsible for A/SRV
 records; regional selection does not install DNS or monitoring infrastructure,
-check Minecraft application health, or provide automatic DNS failover.
+check application health, or provide automatic DNS failover.
 
 ## Use one server with several clusters
 

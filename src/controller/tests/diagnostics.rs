@@ -558,14 +558,17 @@ async fn adding_server_selector_preserves_publication_and_reports_replica_shortf
         ));
         let mut service = service();
         service.metadata.annotations = Some(BTreeMap::from([
-            ("tunnellb.io/server-selector".into(), "region=europe".into()),
+            (
+                "tunnellb.io/server-selector".into(),
+                "region=region-a".into(),
+            ),
             ("tunnellb.io/replicas".into(), replicas.to_string()),
         ]));
         let mut desired = previous.clone();
-        desired.publication.service.server_selector = Some("region=europe".parse().unwrap());
+        desired.publication.service.server_selector = Some("region=region-a".parse().unwrap());
         desired.publication.service.replicas = replicas;
         let mut server = assigned_server(&previous);
-        server.metadata.labels = Some(BTreeMap::from([("region".into(), "europe".into())]));
+        server.metadata.labels = Some(BTreeMap::from([("region".into(), "region-a".into())]));
         let mut exchanges = ready_backend(&previous, &service, &[server]);
         exchanges.extend(save_record(&previous, &desired, 200));
         let mut reads = publication_reads(&desired, true);

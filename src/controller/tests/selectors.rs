@@ -7,8 +7,8 @@ const SELECTOR: &str = "tunnellb.io/server-selector";
 fn regional_service() -> Service {
     let mut service = service();
     service.metadata.annotations = Some(BTreeMap::from([
-        (SELECTOR.into(), format!("{REGION}=europe")),
-        ("tunnellb.io/pool".into(), "minecraft".into()),
+        (SELECTOR.into(), format!("{REGION}=region-a")),
+        ("tunnellb.io/pool".into(), "application".into()),
     ]));
 
     service
@@ -16,8 +16,8 @@ fn regional_service() -> Service {
 
 fn regional_server(record: &PublicationRecord) -> Server {
     let mut server = assigned_server(record);
-    server.spec.pool = Some("minecraft".into());
-    server.metadata.labels = Some(BTreeMap::from([(REGION.into(), "europe".into())]));
+    server.spec.pool = Some("application".into());
+    server.metadata.labels = Some(BTreeMap::from([(REGION.into(), "region-a".into())]));
 
     server
 }
@@ -72,7 +72,7 @@ async fn excluded_or_unready_servers_report_selector_shortfall_without_allocatin
                     .labels
                     .as_mut()
                     .unwrap()
-                    .insert(REGION.into(), "russia".into());
+                    .insert(REGION.into(), "region-b".into());
             }
             "missing-label" => server.metadata.labels = None,
             "namespace" => server.spec.allowed_namespaces = vec!["other".into()],
@@ -147,11 +147,11 @@ async fn matching_assignments_survive_selector_and_unrelated_label_changes() {
 
 #[tokio::test]
 async fn label_changes_revoke_excluded_assignments_before_replacement() {
-    for region in [Some("russia"), None] {
+    for region in [Some("region-b"), None] {
         let mut record = record();
         let service = regional_service();
         record.publication.service.server_selector =
-            Some(format!("{REGION}=europe").parse().unwrap());
+            Some(format!("{REGION}=region-a").parse().unwrap());
         let mut server = regional_server(&record);
         server.metadata.labels =
             region.map(|value| BTreeMap::from([(REGION.into(), value.into())]));

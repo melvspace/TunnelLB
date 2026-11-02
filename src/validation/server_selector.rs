@@ -134,29 +134,29 @@ mod tests {
     #[test]
     fn kubernetes_operators_match_labels_including_missing_and_empty_values() {
         let labels = BTreeMap::from([
-            ("region".into(), "europe".into()),
+            ("region".into(), "region-a".into()),
             ("empty".into(), "".into()),
         ]);
 
         for (value, expected) in [
-            ("region=europe", true),
-            ("region == europe", true),
-            ("region!=russia", true),
-            ("region in (europe, russia)", true),
-            ("region notin (russia)", true),
+            ("region=region-a", true),
+            ("region == region-a", true),
+            ("region!=region-b", true),
+            ("region in (region-a, region-b)", true),
+            ("region notin (region-b)", true),
             ("region", true),
             ("!zone", true),
             ("zone!=a", true),
             ("zone notin (a)", true),
             ("empty=", true),
             ("empty in ()", true),
-            ("region=europe,!zone,empty=", true),
-            ("region=russia", false),
-            ("region notin (europe,russia)", false),
+            ("region=region-a,!zone,empty=", true),
+            ("region=region-b", false),
+            ("region notin (region-a,region-b)", false),
             ("zone in (a)", false),
             ("zone=", false),
             ("!empty", false),
-            ("region=europe,region=russia", false),
+            ("region=region-a,region=region-b", false),
         ] {
             let selector: ServerSelector = value.parse().unwrap();
 

@@ -281,7 +281,12 @@ async fn failed_apply_or_reserve_reports_diagnostics_and_reconciles_remaining_pu
         }
 
         exchanges.extend(publication_reads(&healthy, true));
-        exchanges.extend(worker_job(Operation::Apply, Some(&healthy), None));
+        exchanges.extend(worker_job(
+            Operation::Apply,
+            Some(&healthy),
+            // The second publication's worker succeeds independently.
+            None,
+        ));
         exchanges.extend(healthy_connector(&healthy));
         exchanges.push(service_failure(&service, reason, message, Some(ingress)));
         let (context, queue) = mock(exchanges);
@@ -515,7 +520,12 @@ async fn healthy_publications_reconcile_remote_rules_and_preserve_connectors_on_
         let server = assigned_server(&record);
         let mut exchanges = publication_reads(&record, true);
         exchanges.remove(0);
-        exchanges.extend(worker_job(Operation::Apply, Some(&record), failure));
+        exchanges.extend(worker_job(
+            Operation::Apply,
+            Some(&record),
+            // Exercise both successful and failed remote rule repairs.
+            failure,
+        ));
         exchanges.extend(healthy_connector(&record));
         let (context, queue) = mock(exchanges);
         let result = ensure_publication(&mut record, &server, &context).await;
